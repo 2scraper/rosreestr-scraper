@@ -50,7 +50,8 @@
     ],
     "rights": null,
     "encumbrances": null,
-    "list_kind": null
+    "list_kind": null,
+    "status_code": "1"
   },
   {
     "source": "lk.rosreestr.ru",
@@ -92,7 +93,8 @@
     "old_numbers": null,
     "rights": null,
     "encumbrances": null,
-    "list_kind": "OKS"
+    "list_kind": "OKS",
+    "status_code": null
   },
   {
     "source": "lk.rosreestr.ru",
@@ -134,7 +136,8 @@
     "old_numbers": null,
     "rights": null,
     "encumbrances": null,
-    "list_kind": "FLAT"
+    "list_kind": "FLAT",
+    "status_code": null
   },
   {
     "source": "lk.rosreestr.ru",
@@ -176,7 +179,8 @@
     "old_numbers": null,
     "rights": null,
     "encumbrances": null,
-    "list_kind": "FLAT"
+    "list_kind": "FLAT",
+    "status_code": null
   },
   {
     "source": "lk.rosreestr.ru",
@@ -218,6 +222,7 @@
     "old_numbers": null,
     "rights": null,
     "encumbrances": null,
-    "list_kind": "FLAT"
+    "list_kind": "FLAT",
+    "status_code": null
   }
 ]

@@ -49,7 +49,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional
 
 SOURCE = "lk.rosreestr.ru"
 
@@ -117,23 +117,11 @@ class Record:
     # List lines only: the address search's own kind label, verbatim —
     # "OKS" (a capital construction object), "FLAT" (a room), "PARCEL" (land).
     list_kind: Optional[str] = None
-
-
-def dedupe_by_sku(records: List[Record], seen: Set[str]) -> List[Record]:
-    """Drop records whose sku already appeared earlier in this same run.
-
-    Two queries can legitimately answer with the same object — an address
-    search and a cadastral number naming the same flat — and a caller who
-    fed a file with a repeated line would otherwise pay twice and get two
-    identical rows. A record with no sku is always kept.
-    """
-    fresh = []
-    for r in records:
-        if r.sku is None or r.sku not in seen:
-            if r.sku is not None:
-                seen.add(r.sku)
-            fresh.append(r)
-    return fresh
+    # Full records only: the site's own status CODE, verbatim. `status` maps
+    # it the way the site's card does ("1" is actual, anything else
+    # cancelled); the raw value is kept so a code nobody has seen is not
+    # silently folded into "cancelled" (third-party audit, 2026-09-29).
+    status_code: Optional[str] = None
 
 
 def _atomic_write(path: str, write: Callable) -> None:
@@ -237,7 +225,14 @@ class QueryOutcome:
     records: List[Record] = field(default_factory=list)
     reason: Optional[str] = None        # why it was not answered
     blocked: bool = False               # the reason is a refusal / challenge
-    captcha_solves: int = 0             # paid solves spent on this query
+    # Image tasks 2Captcha ACCEPTED for this query (createTask succeeded).
+    # A task it refused (zero balance, bad key) is not counted: nothing was
+    # charged for it. The price is `captcha_cost`, as 2Captcha reports it.
+    captcha_solves: int = 0
+    captcha_cost: float = 0.0
+    # Elements/lines in the site's answer that were not the contract's shape
+    # (no cadNumber / cadnum): kept out of the rows, and counted here.
+    malformed: int = 0
     captcha_rejected: int = 0           # of those, how many the site refused
     autosolved: bool = False            # the Scraping Browser solved it itself
     capped: bool = False                # the site returned its maximum: a sample
@@ -273,7 +268,8 @@ def run_meta(*, status: str, stop_reason: str, mode: str, engine: str,
              outcomes: List[QueryOutcome], records: int,
              queries_requested: int, duplicates_dropped: int,
              files: Optional[Dict[str, dict]] = None,
-             address_results: Optional[int] = None) -> dict:
+             address_results: Optional[int] = None,
+             spec: Optional[dict] = None) -> dict:
     """The sidecar for a finished run.
 
     `status` is what a consumer branches on:
@@ -300,6 +296,12 @@ def run_meta(*, status: str, stop_reason: str, mode: str, engine: str,
         "run_id": str(uuid.uuid4()),
         "engine": engine,
         "mode": mode,
+        # WHAT kind of question, beyond the input text: the service URL, the
+        # mode, the --list-kind filter and the --details reach. diff_runs.py
+        # refuses two runs whose specs differ — a PARCEL-only run and a
+        # FLAT-only run of one address read as additions and removals
+        # otherwise (third-party audit, 2026-09-29).
+        "query_spec": spec,
         "files": files or {},
         "source": SOURCE,
         "status": status,
@@ -323,6 +325,10 @@ def run_meta(*, status: str, stop_reason: str, mode: str, engine: str,
         # at the address.
         "address_capped": [o.index for o in outcomes if o.capped],
         "captcha_solves": sum(o.captcha_solves for o in outcomes),
+        # Summed from getTaskResult's own `cost` field for solved tasks — the
+        # figure 2Captcha states, not an estimate made here.
+        "captcha_cost": round(sum(o.captcha_cost for o in outcomes), 6),
+        "malformed_rows": sum(o.malformed for o in outcomes),
         "captcha_rejected": sum(o.captcha_rejected for o in outcomes),
         "autosolved": sum(1 for o in outcomes if o.autosolved),
         "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -354,7 +360,8 @@ def save(records: List[Record], out_prefix: str, fmt: str,
 def finish_run(outcomes: List[QueryOutcome], out_prefix: str, fmt: str,
                allow_empty: bool, *, mode: str, engine: str,
                queries_requested: int, stop_reason: str = "completed",
-               address_results: Optional[int] = None) -> int:
+               address_results: Optional[int] = None,
+               spec: Optional[dict] = None) -> int:
     """Merge, write output + sidecar, return the exit code.
 
     Shared by every engine so the status/exit mapping cannot drift between
@@ -367,12 +374,24 @@ def finish_run(outcomes: List[QueryOutcome], out_prefix: str, fmt: str,
     than trusted to the engine to report.
     """
     outcomes = sorted(outcomes, key=lambda o: o.index)
-    seen: Set[str] = set()
     merged: List[Record] = []
+    at: Dict[str, int] = {}
     before = 0
     for o in outcomes:
-        before += len(o.records)
-        merged.extend(dedupe_by_sku(o.records, seen))
+        for r in o.records:
+            before += 1
+            if r.sku is None:
+                merged.append(r)
+                continue
+            if r.sku not in at:
+                at[r.sku] = len(merged)
+                merged.append(r)
+            elif merged[at[r.sku]].detail_level == "list" and r.detail_level == "full":
+                # The same object seen twice: the FULL record wins, in the
+                # place the object first appeared. Keeping the first row
+                # threw away a paid record for a list line when two
+                # addresses overlapped (third-party audit, 2026-09-29).
+                merged[at[r.sku]] = r
     duplicates = before - len(merged)
 
     answered = [o for o in outcomes if o.answered]
@@ -392,7 +411,7 @@ def finish_run(outcomes: List[QueryOutcome], out_prefix: str, fmt: str,
         write_run_meta(out_prefix, run_meta(
             status=status, stop_reason=stop_reason, mode=mode, engine=engine,
             outcomes=outcomes, records=len(merged), queries_requested=queries_requested,
-            duplicates_dropped=duplicates, address_results=address_results,
+            duplicates_dropped=duplicates, address_results=address_results, spec=spec,
             files={ext: file_digest(f"{out_prefix}.{ext}")
                    for ext in ("json", "csv") if fmt in (ext, "both")}))
 

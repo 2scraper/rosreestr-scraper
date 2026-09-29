@@ -44,7 +44,7 @@ What the service is, measured 2026-09-29 over a Russian exit:
   codes     GET  /account-back/dictionary/{NAME}?sortKey=code
             The object-type list IS the "all categories" of the brief: nine
             kinds, from "Земельный участок" to "Машино-место". A snapshot
-            ships as rosreestr_codes.json; --mode dictionaries refreshes it.
+            ships as rosreestr_codes.py; --mode dictionaries refreshes it.
 
 Not implemented, and said so rather than implied: the page's other three
 search types — by restriction-of-right number, by previously assigned number,
@@ -56,7 +56,6 @@ import html as html_lib
 import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
@@ -70,6 +69,12 @@ ON_URL = f"{API}/on"
 CAPTCHA_IMAGE_URL = f"{API}/captcha.png"
 ADDRESS_SEARCH_URL = f"{API}/address/search"
 DICTIONARY_URL = f"{API}/dictionary"
+
+# The cadastral engineer's name, phone and certificate number: in every full
+# record the site returns, a private person's data, and never read into a
+# Record. make_fixtures.py and the --dump-html traffic dump replace them.
+PERSONAL_FIELDS = ("cadEngFIO", "cadEngPhone", "cadEngCertNumber")
+SCRUBBED = "{scrubbed}"
 
 # The dictionaries the page itself loads, in the order it loads them.
 DICTIONARIES = ("OBJECT_TYPE_CODES", "LAND_CATEGORY_CODES",
@@ -97,17 +102,10 @@ SEL_CAPTCHA_IMAGE = "img[alt='captcha'], img[class*='captcha-content-img']"
 # The refresh link has no id; its text is the stable part.
 CAPTCHA_REFRESH_TEXT = "Обновить картинку"
 
-_CODES_PATH = Path(__file__).resolve().parent / "rosreestr_codes.json"
-_codes_cache: Optional[Dict[str, Dict[str, str]]] = None
-
-
 def codes() -> Dict[str, Dict[str, str]]:
     """The code dictionaries snapshot: {NAME: {code: label}}."""
-    global _codes_cache
-    if _codes_cache is None:
-        data = json.loads(_CODES_PATH.read_text(encoding="utf-8"))
-        _codes_cache = {k: v for k, v in data.items() if not k.startswith("_")}
-    return _codes_cache
+    from rosreestr_codes import CODES
+    return CODES
 
 
 def object_types() -> Dict[str, str]:
@@ -231,6 +229,12 @@ def classify_on(status: Optional[int], body: Optional[str]) -> Tuple[str, Option
         return REFUSED, parsed
     if status is not None and status >= 500:
         return SERVER_ERROR, parsed
+    # An ANSWER needs a success status AND the contract's shape. A 400 that
+    # happens to carry {"elements": []} is not "no such object" — that
+    # reading turned a refused request into an empty result (third-party
+    # audit, 2026-09-29).
+    if status is not None and not 200 <= status < 300:
+        return UNREADABLE, parsed
     if isinstance(parsed, dict) and isinstance(parsed.get("elements"), list):
         return ANSWERED, parsed
     return UNREADABLE, parsed
@@ -331,6 +335,7 @@ def record_from_element(el: dict, *, query: str, index: int, position: int) -> R
         detail_level="full",
         object_type_code=type_code,
         status=None if status is None else ("actual" if status == STATUS_ACTUAL else "cancelled"),
+        status_code=status,
         cad_quarter=_text(el.get("cadQuarter")),
         area=area,
         area_unit=unit,
@@ -362,14 +367,26 @@ def record_from_element(el: dict, *, query: str, index: int, position: int) -> R
     )
 
 
-def parse_on(data: dict, *, query: str, index: int) -> List[Record]:
-    """Every element of an answered POST /on body, as Records."""
-    out = []
+def parse_on_checked(data: dict, *, query: str, index: int) -> Tuple[List[Record], int]:
+    """(records, malformed) for an answered POST /on body.
+
+    `malformed` counts elements that are not an object carrying a
+    cadNumber. They are never silently dropped: the flow fails a query whose
+    every element is malformed, and records a partial loss otherwise.
+    """
+    out, bad = [], 0
     for el in data.get("elements") or []:
         if isinstance(el, dict) and el.get("cadNumber"):
             out.append(record_from_element(el, query=query, index=index,
                                            position=len(out) + 1))
-    return out
+        else:
+            bad += 1
+    return out, bad
+
+
+def parse_on(data: dict, *, query: str, index: int) -> List[Record]:
+    """Every well-formed element of an answered POST /on body, as Records."""
+    return parse_on_checked(data, query=query, index=index)[0]
 
 
 # The address search labels a line with one of these. Mapped to the site's
@@ -386,12 +403,29 @@ ADDRESS_KIND_TO_TYPE = {"PARCEL": "002001001000"}
 ADDRESS_CAP = 100
 
 
-def parse_address_search(body: str, *, query: str, index: int) -> List[Record]:
-    """The free address search's lines, as `detail_level="list"` Records."""
-    data = json.loads(body) if body else []
-    out = []
-    for item in data if isinstance(data, list) else []:
+class UnreadableAnswer(ValueError):
+    """The site answered, but not in the shape its contract has."""
+
+
+def parse_address_search_checked(body: str, *, query: str, index: int) -> Tuple[List[Record], int]:
+    """(records, malformed) for the address search's answer.
+
+    The answer must be a JSON ARRAY. An object — {"error": "temporarily
+    unavailable"}, say — raises UnreadableAnswer instead of reading as an
+    empty list, which turned a failed search into "nothing at this address"
+    (third-party audit, 2026-09-29). Lines without a cadnum are counted.
+    """
+    try:
+        data = json.loads(body) if body else None
+    except ValueError:
+        raise UnreadableAnswer("the address search did not answer JSON") from None
+    if not isinstance(data, list):
+        raise UnreadableAnswer(f"the address search answered a {type(data).__name__}, "
+                               f"not a list: {str(body)[:120]!r}")
+    out, bad = [], 0
+    for item in data:
         if not isinstance(item, dict) or not item.get("cadnum"):
+            bad += 1
             continue
         type_code = ADDRESS_KIND_TO_TYPE.get(str(item.get("type")))
         actual = item.get("actual")
@@ -410,7 +444,12 @@ def parse_address_search(body: str, *, query: str, index: int) -> List[Record]:
             status=None if actual is None else ("actual" if actual else "not_actual"),
             list_kind=_text(item.get("type")),
         ))
-    return out
+    return out, bad
+
+
+def parse_address_search(body: str, *, query: str, index: int) -> List[Record]:
+    """The address search's well-formed lines, as `detail_level="list"` Records."""
+    return parse_address_search_checked(body, query=query, index=index)[0]
 
 
 def parse_dictionary(body: str) -> Dict[str, str]:

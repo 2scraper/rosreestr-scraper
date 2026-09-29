@@ -2,3 +2,7 @@
 # file — see CONTRIBUTING.md. Not something a user of the scraper installs.
 pytest>=7.0
 pip-audit>=2.7
+# The wheel job builds with --no-build-isolation, so the build backend comes
+# from this hashed lock instead of an unpinned download.
+setuptools>=77
+wheel>=0.42

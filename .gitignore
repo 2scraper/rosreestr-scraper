@@ -6,7 +6,6 @@
 !sample_output.json
 !sample_output.csv
 !fixtures.json
-!rosreestr_codes.json
 rosreestr_objects.*
 *.meta.json
 *_debug.html

@@ -147,7 +147,7 @@ which a lookup returns: Земельный участок, Здание, Пом�
 | `--solve-captcha never` | | never pay; records then need auto-solve |
 | `--report-correct` | off | also report accepted answers (wrong ones always are) |
 | `--delay`, `--retries`, `--retry-delay` | 2, 1, 5 | pacing |
-| `--cdp-endpoint`, `--proxy`, `--proxy-file`, `--proxy-rotate`, `--local` | | where the browser runs |
+| `--cdp-endpoint`, `--proxy`, `--proxy-file`, `--proxy-rotate`, `--local` | | where the browser runs; `--proxy-rotate per-page` is for `--mode cadastral` only |
 | `--fingerprint`, `--fp-country`, `--fp-tags`, `--locale` | | identity of a local browser |
 | `--headless` / `--headful`, `--dump-html DIR`, `--allow-empty`, `--format` | | |
 
@@ -167,8 +167,17 @@ Every engine takes exactly the same flags — they are built by one parser.
    200 or 403). A refused answer is reported (`reportIncorrect`), a fresh
    image is solved — up to `--captcha-attempts`, never past `--max-solves`.
 
-The sidecar records `captcha_solves`, `captcha_rejected` and `autosolved`:
-the bill, measured.
+The sidecar records `captcha_solves` (image tasks 2Captcha accepted — a task
+it refused, e.g. for a zero balance, is not counted), `captcha_cost` (summed
+from 2Captcha's own reported `cost`), `captcha_rejected` and `autosolved`:
+the bill, measured. It also records the run's `query_spec` (mode, filters,
+`--details` reach), which `diff_runs.py` requires to match, and
+`malformed_rows` — elements of the site's answers that were not records and
+were left out rather than silently dropped.
+
+`--mode scan` reports a captcha as `solved` only when the page, read again
+after the token went in (or after auto-solve said it finished), no longer
+shows it; `token_injected` and `site_verified` are recorded separately.
 
 ## Output
 
@@ -192,6 +201,7 @@ prefix; the rest are Rosreestr's.
 | `parent_cad_number`, `child_cad_numbers`, `old_numbers` | |
 | `rights`, `encumbrances` | `[{number, date, type}]` — never who holds them: the public service does not show it |
 | `list_kind` | list lines: the address search's own `OKS` / `FLAT` / `PARCEL` |
+| `status_code` | full records: the site's own status code, verbatim (`status` maps `"1"` to actual and anything else to cancelled, as the site's card does) |
 
 **Not in the output, on purpose:** the cadastral engineer's name, phone and
 certificate number. The service returns them with every record; they
@@ -208,7 +218,7 @@ A sample cut from real runs: [`sample_output.json`](sample_output.json) /
 | `2` | bad usage |
 | `3` | blocked: the captcha kept being refused, or the site refused the request |
 | `4` | every query answered "no such object" (or nothing of the `--list-kind` asked); nothing written (`--allow-empty` to write an empty table) |
-| `5` | nothing obtained — no Russian exit, a dead proxy, the browser never started |
+| `5` | nothing obtained — no Russian exit, a dead proxy, the browser never started, or an answer that was not the site's contract (an error object, a non-2xx status, records without a cadastral number) |
 | `6` | partial: some answered, some failed (`queries_failed`, by input position and reason) |
 
 A run that obtains nothing never overwrites a previous good output.

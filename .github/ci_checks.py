@@ -142,7 +142,7 @@ HEX32_ALLOWED = re.compile(
     re.I)
 
 # Generated data files exempt from the bare-hex rule. EMPTY, and that is the
-# stricter arrangement: fixtures.json and rosreestr_codes.json — the big
+# stricter arrangement: fixtures.json and rosreestr_codes.py — the big
 # generated files nobody reads line by line — are covered by the strictest
 # rule like every other tracked file.
 GENERATED_DATA_FILES = ()

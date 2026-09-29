@@ -562,6 +562,12 @@ TWOCAPTCHA_REPORT_CORRECT_URL = f"{TWOCAPTCHA_API_V2}/reportCorrect"
 IMAGE_COMMENT = "5 characters: Russian or Latin letters and digits, as shown"
 
 
+class ImageTaskNotCreated(RuntimeError):
+    """2Captcha did not accept the task (bad key, zero balance, a request that
+    never reached it). Nothing was charged — the caller must not count it as
+    a solve."""
+
+
 @dataclass
 class ImageSolution:
     text: str
@@ -589,14 +595,17 @@ def solve_image(api_key: str, image: bytes, *, language_pool: str = "rn",
             "An image captcha needs solving but no 2captcha API key was given. "
             "Pass --twocaptcha-key, or set TWOCAPTCHA_KEY in .env.")
     started = time.time()
-    payload = _post_json(TWOCAPTCHA_CREATE_TASK_URL, {
-        "clientKey": api_key, "languagePool": language_pool,
-        "task": {"type": "ImageToTextTask",
-                 "body": base64.b64encode(image).decode("ascii"),
-                 "comment": comment}})
-    if payload.get("errorId"):
-        raise RuntimeError(f"createTask failed: {payload.get('errorCode')} — "
-                           f"{payload.get('errorDescription')}")
+    try:
+        payload = _post_json(TWOCAPTCHA_CREATE_TASK_URL, {
+            "clientKey": api_key, "languagePool": language_pool,
+            "task": {"type": "ImageToTextTask",
+                     "body": base64.b64encode(image).decode("ascii"),
+                     "comment": comment}})
+    except RuntimeError as e:
+        raise ImageTaskNotCreated(str(e)) from None
+    if payload.get("errorId") or "taskId" not in payload:
+        raise ImageTaskNotCreated(f"createTask failed: {payload.get('errorCode')} — "
+                                  f"{payload.get('errorDescription')}")
     task_id = payload["taskId"]
     while time.time() - started < max_wait:
         time.sleep(poll_interval)
