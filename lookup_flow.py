@@ -54,6 +54,7 @@ auto-solve must try first — do not forget Captcha.setAutoSolve"):
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
@@ -533,18 +534,47 @@ def run_address(session, args, index: int, address: str) -> Tuple[QueryOutcome, 
     return outcome, None
 
 
-def open_or_explain(session) -> Optional[str]:
-    """Open the service. Returns None, or the stop_reason if it never came up."""
+def exit_country(cdp_endpoint: Optional[str], proxy_url: Optional[str]) -> Optional[str]:
+    """The exit country this run's own credentials ask for, or None.
+
+    Read from the LOGIN only — `country-xx` in a Scraping Browser endpoint,
+    `-region-xx` in a 2Captcha proxy login — never from the password, which is
+    split off before anything is matched. The endpoint wins, as it does in
+    cli: with one set, the proxy is for local runs and is not used."""
+    for url, key in ((cdp_endpoint, "country"), (proxy_url, "region")):
+        if url:
+            userinfo = url.split("://", 1)[-1]
+            login = userinfo.rsplit("@", 1)[0].split(":", 1)[0] if "@" in userinfo else ""
+            m = re.search(rf"-{key}-([a-z]{{2}})(?:-|$)", login, re.I)
+            return m.group(1).lower() if m else None
+    return None
+
+
+def open_or_explain(session, country: Optional[str] = None) -> Optional[str]:
+    """Open the service. Returns None, or the stop_reason if it never came up.
+
+    `country` is exit_country()'s answer, and only changes the advice: a
+    timeout through an exit that is ALREADY Russian is that exit failing, not
+    the address being foreign, and "use a Russian exit" would send the reader
+    to change a setting that is already right."""
     try:
         status, html = session.open_service()
     except Exception as e:  # noqa: BLE001 — engines raise their driver's types
         from proxy_pool import redact_secret_patterns
         text = redact_secret_patterns(str(e))
         logger.error("The service page did not load: %s", text[:400])
-        logger.error("lk.rosreestr.ru does not answer from outside Russia (every "
-                     "host timed out at the TCP connect from a Belgian exit, "
-                     "2026-09-29). Use a Russian exit: --proxy with a -region-ru "
-                     "login, or --cdp-endpoint with country-ru.")
+        if country == "ru":
+            logger.error("This run's exit is already Russian, and lk.rosreestr.ru still did "
+                         "not answer through it: the exit is failing, not the address being "
+                         "foreign. Measured 2026-09-29: the Scraping Browser's country-ru exit "
+                         "timed out on the site while a 2Captcha -region-ru proxy reached it "
+                         "two minutes later. Retry later, or switch transport "
+                         "(--local with ROSREESTR_PROXY, or the other way round).")
+        else:
+            logger.error("lk.rosreestr.ru does not answer from outside Russia (every "
+                         "host timed out at the TCP connect from a Belgian exit, "
+                         "2026-09-29). Use a Russian exit: --proxy with a -region-ru "
+                         "login, or --cdp-endpoint with country-ru.")
         return "proxy_failed" if "ERR_PROXY" in text or "ERR_TUNNEL" in text else "page_load_failed"
     if not getattr(session, "needs_form", True):
         # A one-shot transport (the Scraper API) has no form to find; the

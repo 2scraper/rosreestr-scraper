@@ -20,6 +20,21 @@ rely on its exits either.
 - `ROSREESTR_PROXY` — a 2Captcha proxy login with `-region-ru`, used with
   `--local` (or on its own, with no endpoint set).
 
+### …and the exit is already Russian
+
+    This run's exit is already Russian, and lk.rosreestr.ru still did not answer through it ...
+
+**Cause:** that exit is failing — the setting is right. On 2026-09-29 the
+Scraping Browser's `country-ru` exit connected and authenticated
+(`Captcha.setAutoSolve enabled`) and then timed out on the site — at 16:32
+UTC from a GitHub runner and at 16:36 from this Mac, after working at 15:49
+— while a `-region-ru` proxy reached the same page at 16:38. The message reads the
+country from the endpoint's or the proxy's LOGIN, never from the password.
+
+**Fix:** retry later, or switch transport for now — `--local` with
+`ROSREESTR_PROXY`, or the endpoint if the proxy is the one failing. The
+canary uses the endpoint only, so it goes red during such an outage.
+
 ## "Could not connect to --cdp-endpoint … HTTP 500"
 
 If the message says **`profile_locked`**, the profile is in use by another

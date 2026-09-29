@@ -4,6 +4,17 @@ Keep a Changelog format, and SemVer as closely as a CLI toolkit can manage:
 a patch release means fixes, not a promise that no default ever moves — a
 behaviour change in one is announced at the top of its notes.
 
+## [Unreleased]
+
+### Fixed
+
+- **A timeout through a Russian exit was advised to "use a Russian exit".**
+  The advice now reads the exit country from the endpoint's or proxy's login
+  (never the password): an exit that is already `country-ru`/`-region-ru` is
+  told the exit is failing and to retry or switch transport. Measured
+  2026-09-29, when the Scraping Browser's `country-ru` exit timed out on the
+  site (16:32 and 16:36 UTC) while a `-region-ru` proxy reached it at 16:38.
+
 ## [0.1.1] — 2026-09-29
 
 Fixes from a third-party audit of 0.1.0 (2026-09-29), each reproduced on
