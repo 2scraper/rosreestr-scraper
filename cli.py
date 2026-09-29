@@ -36,7 +36,7 @@ import os
 import signal
 import sys
 import time
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 import env_config
 import lookup_flow
@@ -314,7 +314,7 @@ def run(args, open_session: Callable, engine: str) -> int:
     try:
         if args.mode == "scan":
             return _run_scan(args, session, solver, budget)
-        stop = lookup_flow.open_or_explain(session)
+        stop = lookup_flow.open_or_explain(session, _exit_country(args, pool))
         if stop:
             if stop == "service_page_not_served" and hasattr(session, "dump"):
                 # Always, not only with --dump-html: "the form never appeared"
@@ -396,7 +396,7 @@ def _run_cadastral_rotating(args, holder, pool, solver, budget, queries,
                 outcomes.append(ow.QueryOutcome(index=start_index + offset, query=q,
                                                 reason="browser_start_failed"))
                 continue
-            if lookup_flow.open_or_explain(holder[0]):
+            if lookup_flow.open_or_explain(holder[0], _exit_country(args, pool)):
                 outcomes.append(ow.QueryOutcome(index=start_index + offset, query=q,
                                                 reason="page_load_failed"))
                 continue
@@ -511,6 +511,11 @@ def _run_scan(args, session, solver, budget) -> int:
     # Loaded = no error. Not the HTTP status: Selenium never has one, and
     # every scan through it would have "failed".
     return ow.EXIT_OK if any(not r["error"] for r in results) else ow.EXIT_FETCH_FAILED
+
+
+def _exit_country(args, pool) -> Optional[str]:
+    """The country this run's exit asks for — the advice on a timeout depends on it."""
+    return lookup_flow.exit_country(args.cdp_endpoint, pool.current if pool else None)
 
 
 def _finish_failed(args, engine, stop) -> int:

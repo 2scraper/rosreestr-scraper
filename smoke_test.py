@@ -927,6 +927,49 @@ def check_audit_2026_09_29():
        ("cancelled", "7"))
 
 
+def check_exit_advice():
+    """A timeout through an exit that is already Russian is that exit failing
+    (the Scraping Browser's country-ru exit, 2026-09-29, while a -region-ru
+    proxy reached the site) — the advice must not say "use a Russian exit"."""
+    print("\n[exit-aware advice on a page that never loaded]")
+    ec = lookup_flow.exit_country
+    eq("country from a Scraping Browser login",
+       ec("ws://u-zone-scraping_browser-country-ru-pid-7:{password}@cb.2captcha.com:9222", None), "ru")
+    eq("region from a 2Captcha proxy login",
+       ec(None, "http://u-region-ru:{password}@ru.proxy.2captcha.com:2334"), "ru")
+    eq("the endpoint wins over the proxy, as in cli",
+       ec("ws://u-zone-scraping_browser-country-be-pid-1:{password}@h:9222",
+          "http://u-region-ru:{password}@h:2334"), "be")
+    eq("the PASSWORD is never read, even when it looks like a country",
+       # built in two pieces: whole, the line is a credentialled URL to the secret scan
+       ec("ws://u-zone-scraping_browser-pid-1:" + "x-country-ru@h:9222", None), None)
+    eq("no exit named -> None", ec(None, None), None)
+
+    class Dead:
+        def open_service(self):
+            raise RuntimeError("Page.goto: net::ERR_TIMED_OUT at " + ra.PAGE_URL)
+    seen = []
+    h = logging.Handler(); h.emit = lambda r: seen.append(r.getMessage())
+    lg = logging.getLogger("lookup_flow"); lg.addHandler(h)
+    level = lg.level; lg.setLevel(logging.ERROR)   # the suite runs with root at CRITICAL
+    try:
+        stop_ru = lookup_flow.open_or_explain(Dead(), "ru"); ru = list(seen); seen.clear()
+        stop_none = lookup_flow.open_or_explain(Dead(), None); other = list(seen)
+    finally:
+        lg.removeHandler(h); lg.setLevel(level)
+    eq("the stop reason does not depend on the advice", (stop_ru, stop_none),
+       ("page_load_failed", "page_load_failed"))
+    check("a Russian exit is told the EXIT is failing, not to use a Russian exit",
+          any("already Russian" in m for m in ru) and not any("Use a Russian exit" in m for m in ru))
+    check("an exit of unknown country still gets the use-a-Russian-exit advice",
+          any("Use a Russian exit" in m for m in other))
+    tree = ast.parse(open(os.path.join(REPO, "cli.py"), encoding="utf-8").read())
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "open_or_explain"]
+    check(f"every cli call of open_or_explain passes the exit country ({len(calls)} calls)",
+          len(calls) >= 2 and all(len(c.args) == 2 for c in calls))
+
+
 def argparse_ns(**kw):
     import argparse
     return argparse.Namespace(**kw)
@@ -1455,7 +1498,7 @@ def main(argv=None) -> int:
     groups = [check_full_record_values, check_personal_data_is_never_read,
               check_answer_classification, check_address_search, check_numbers_and_codes,
               check_page_recognition, check_exit_codes, check_csv_safety,
-              check_flow_on_measured_behaviour, check_audit_2026_09_29,
+              check_flow_on_measured_behaviour, check_audit_2026_09_29, check_exit_advice,
               check_budget_has_one_gate,
               check_cli_contract, check_rotation_survives_a_failed_launch,
               check_engine_without_cdp, check_engines_share_one_cli, check_env_contract,
