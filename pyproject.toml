@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rosreestr-scraper"
-version = "0.1.0"
+version = "0.1.1"
 description = "Rosreestr (lk.rosreestr.ru) real-estate object lookups — cadastral value, type, area, rights and encumbrances by cadastral number or address, to JSON/CSV."
 readme = "README.md"
 license = "MIT"
