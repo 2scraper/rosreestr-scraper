@@ -1,0 +1,6 @@
+# Core — what every engine and the offline suite need. Install exactly ONE
+# engine on top (requirements-playwright.txt is the recommended one): the
+# engines' own pins collide (pyee between playwright and pyppeteer, urllib3
+# between pyppeteer and selenium), so use a virtualenv per engine if you
+# want more than one. Hash-locked versions: requirements*.lock.
+requests>=2.31.0

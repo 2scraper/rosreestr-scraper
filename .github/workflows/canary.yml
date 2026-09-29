@@ -1,0 +1,108 @@
+name: canary
+
+# tests.yml never touches lk.rosreestr.ru, which leaves a real gap: a change
+# to the site only shows up when a user hits it. This is the other half — a
+# real run against the live service.
+#
+# DISPATCH-ONLY, and SKIPS (green, with a notice) without its secrets, for two
+# measured reasons:
+#   * lk.rosreestr.ru does not answer from outside Russia (every host timed out
+#     at the TCP connect from a Belgian exit, 2026-09-29), and a GitHub runner
+#     is outside Russia — so a canary with no Russian exit cannot pass, and a
+#     check that is always red teaches everyone to ignore checks;
+#   * a Scraping Browser profile's credentials expire in about a day, so a
+#     scheduled job would go red on a stale secret rather than on the site.
+# Refresh ROSREESTR_CDP_ENDPOINT (country-ru) before dispatching.
+#
+# Two jobs, because they need different things:
+#   free-lookups  the address search + the code dictionaries: no captcha,
+#                 needs only the Russian exit
+#   full-record   one cadastral number: one paid image captcha (~$0.001),
+#                 needs the exit AND TWOCAPTCHA_KEY
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  free-lookups:
+    runs-on: ubuntu-latest
+    env:
+      HAS_EXIT: ${{ secrets.ROSREESTR_CDP_ENDPOINT != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_EXIT == 'true'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: env.HAS_EXIT == 'true'
+        with:
+          python-version: "3.12"
+      - name: No Russian exit configured
+        if: env.HAS_EXIT != 'true'
+        run: echo "::notice::Skipped — lk.rosreestr.ru answers only Russian exits. Set the ROSREESTR_CDP_ENDPOINT secret (a Scraping Browser profile with country-ru) and dispatch again."
+      - name: Install the Playwright engine
+        if: env.HAS_EXIT == 'true'
+        run: pip install --require-hashes -r requirements-playwright.lock
+      - name: Address search and dictionaries, live
+        if: env.HAS_EXIT == 'true'
+        env:
+          ROSREESTR_CDP_ENDPOINT: ${{ secrets.ROSREESTR_CDP_ENDPOINT }}
+        run: |
+          set -e
+          python3 playwright_scraper.py --mode address \
+            --address "Москва, ул. Тверская, д. 13" --out canary_addr
+          python3 playwright_scraper.py --mode dictionaries --out canary_codes
+          python3 - <<'PY'
+          import json
+          m = json.load(open("canary_addr.meta.json"))
+          rows = json.load(open("canary_addr.json"))
+          assert m["status"] == "complete", m["status"]
+          assert len(rows) >= 50, f"only {len(rows)} lines for a building measured at 100"
+          assert all(r["sku"] and r["detail_level"] == "list" for r in rows)
+          codes = json.load(open("canary_codes.json"))
+          assert len(codes.get("OBJECT_TYPE_CODES", {})) == 9, "the nine object kinds changed"
+          print(f"canary OK: {len(rows)} address lines, {len(codes)} dictionaries")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && env.HAS_EXIT == 'true'
+        with:
+          name: canary-free
+          path: canary_*
+
+  full-record:
+    runs-on: ubuntu-latest
+    env:
+      HAS_ALL: ${{ secrets.ROSREESTR_CDP_ENDPOINT != '' && secrets.TWOCAPTCHA_KEY != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_ALL == 'true'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: env.HAS_ALL == 'true'
+        with:
+          python-version: "3.12"
+      - name: Missing secrets
+        if: env.HAS_ALL != 'true'
+        run: echo "::notice::Skipped — a full record needs ROSREESTR_CDP_ENDPOINT (country-ru) AND TWOCAPTCHA_KEY for its one image captcha."
+      - name: Install the Playwright engine
+        if: env.HAS_ALL == 'true'
+        run: pip install --require-hashes -r requirements-playwright.lock
+      - name: One full record, live
+        if: env.HAS_ALL == 'true'
+        env:
+          ROSREESTR_CDP_ENDPOINT: ${{ secrets.ROSREESTR_CDP_ENDPOINT }}
+          TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY }}
+        run: |
+          set -e
+          python3 playwright_scraper.py --cad-number 77:01:0001044:3030 \
+            --out canary_record --max-solves 3
+          python3 - <<'PY'
+          import json
+          m = json.load(open("canary_record.meta.json"))
+          [r] = json.load(open("canary_record.json"))
+          assert m["status"] == "complete", m
+          assert r["sku"] == "77:01:0001044:3030"
+          assert r["price"] and r["currency"] == "RUB", "the cadastral value is gone"
+          assert r["category"] == "Помещение" and r["detail_level"] == "full"
+          print(f"canary OK: {r['title']} — {r['price']} RUB, "
+                f"{m['captcha_solves']} solve(s), {m['captcha_rejected']} rejected")
+          PY

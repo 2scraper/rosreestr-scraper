@@ -1,0 +1,47 @@
+name: Site changed
+description: Rosreestr changed its page or API and a lookup no longer works.
+labels: ["site-change"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most common way a scraper stops working, and the fix is different
+        from a code bug: something on lk.rosreestr.ru moved.
+
+        What this code relies on (CONTRIBUTING.md has the full list): the
+        form's ids `#query`, `#captcha`, `#realestateobjects-search` and the
+        captcha `<img alt="captcha">`; `GET /account-back/captcha/{text}` as
+        the check; `POST /account-back/on` for a record;
+        `GET /account-back/address/search` for the free list.
+
+  - type: dropdown
+    id: what_broke
+    attributes:
+      label: What stopped working
+      options:
+        - The form is not recognised ("not the search form")
+        - The captcha image is not found, or every answer is rejected
+        - A record comes back but a column is null or wrong
+        - The address search returns nothing
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: |
+        Run with `--dump-html DIR` and attach `queryN.net.json` (the page's
+        own /account-back/ traffic) — REMOVE the captcha texts and every
+        `cadEng*` field (the cadastral engineer's name and phone) first.
+        For a column problem: the value you got and the value on the page.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Whether it reproduces on a second engine, and when it last worked.
