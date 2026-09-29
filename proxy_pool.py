@@ -431,7 +431,9 @@ def from_args(args) -> Optional[ProxyPool]:
 # 3 s apart ride that out, while a profile genuinely held by another run
 # still fails in about 9 s. And pyppeteer's connect never surfaces the 500
 # at all — only a timeout ends it — so its per-attempt timeout is short: a
-# successful connect took 0.8-0.95 s.
+# successful connect took 0.8-0.95 s. The 500's body names the cause when it
+# is a lock: "profile_locked" (seen 2026-09-29 in rosreestr-scraper's canary,
+# where two jobs shared one profile — no retry window covers that).
 CDP_CONNECT_ATTEMPTS = 3
 CDP_CONNECT_PAUSE_S = 3.0
 CDP_CONNECT_TIMEOUT_S = 10.0
@@ -450,6 +452,12 @@ def cdp_refusal_advice(error_text: str) -> str:
     expired endpoint in the family answers 401.
     """
     text = error_text or ""
+    if "profile_locked" in text:
+        # The service's own word for it, in the 500's body (seen 2026-09-29
+        # when two canary jobs shared one profile).
+        return ("the profile is in use by another connection (profile_locked): "
+                "one live connection per pid. Wait for the other run to finish, or "
+                "give each concurrent run its own pid.")
     if _has_status(text, "401"):
         return ("HTTP 401: the profile's credentials were refused — they expire "
                 "(about a day). Take fresh ones from the 2Captcha dashboard.")

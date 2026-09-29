@@ -888,6 +888,9 @@ def check_cdp_connect_policy():
        proxy_pool.cdp_refusal_advice("Timeout 15000ms exceeded").startswith("no answer"), True)
     check("a 401 is explained as expired credentials",
           "expire" in proxy_pool.cdp_refusal_advice("<ws unexpected response> 401 Unauthorized"))
+    check("the service's own 'profile_locked' is named, not guessed at",
+          "in use by another connection" in proxy_pool.cdp_refusal_advice(
+              "WebSocket error: 500 Internal Server Error profile_locked"))
 
 
 def check_diff_refuses_artefacts():

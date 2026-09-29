@@ -70,6 +70,13 @@ jobs:
           path: canary_*
 
   full-record:
+    # AFTER free-lookups, never beside it: both jobs use the one Scraping
+    # Browser profile in the secret, and a profile takes one live connection.
+    # Run in parallel on the first dispatch (2026-09-29), the second job got
+    # "500 Internal Server Error profile_locked" on all three attempts.
+    # `always()` so a red free-lookups still lets this one run.
+    needs: free-lookups
+    if: always()
     runs-on: ubuntu-latest
     env:
       HAS_ALL: ${{ secrets.ROSREESTR_CDP_ENDPOINT != '' && secrets.TWOCAPTCHA_KEY != '' }}

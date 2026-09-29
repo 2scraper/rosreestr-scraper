@@ -22,6 +22,11 @@ rely on its exits either.
 
 ## "Could not connect to --cdp-endpoint … HTTP 500"
 
+If the message says **`profile_locked`**, the profile is in use by another
+connection — one live connection per `pid`. The canary's first dispatch met
+exactly this: two jobs sharing one profile in parallel, the second refused on
+every attempt. Run one job per profile at a time, or give each its own `pid`.
+
 The Scraping Browser refused the WebSocket upgrade. Seen on every connect
 from 12:15 to 12:17 (local time) on 2026-09-29, starting right after a run on
 the same profile had ended; the next attempt, at 12:27, succeeded.
