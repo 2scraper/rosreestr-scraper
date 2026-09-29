@@ -4,7 +4,7 @@ Keep a Changelog format, and SemVer as closely as a CLI toolkit can manage:
 a patch release means fixes, not a promise that no default ever moves — a
 behaviour change in one is announced at the top of its notes.
 
-## [Unreleased]
+## [0.1.1] — 2026-09-29
 
 Fixes from a third-party audit of 0.1.0 (2026-09-29), each reproduced on
 `main` before it was changed, each pinned by a check that goes red when the
