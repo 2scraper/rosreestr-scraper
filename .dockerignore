@@ -5,7 +5,6 @@ legacy
 tests
 smoke_test.py
 *.json
-!rosreestr_codes.json
 *.csv
 *.meta.json
 *_debug.html

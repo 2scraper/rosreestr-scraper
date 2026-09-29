@@ -25,7 +25,8 @@ Three buckets: added (in --new only), removed (in --old only), changed.
 Refused unless --force, because each would report artefacts as changes:
   * a run whose sidecar says it was not `complete` — the queries it never
     answered would read as "removed";
-  * two runs that asked different questions (a different input list);
+  * two runs that asked different questions (a different input list), or
+    the same input differently (another --list-kind, --details reach, URL);
   * two runs in different modes — a list line from the free address search
     carries none of the fields a full record does, so every one would read
     as changed;
@@ -118,7 +119,7 @@ def _digest_mismatch(path: str, meta: dict) -> Optional[str]:
 
 def check_comparable(old_path: str, new_path: str) -> List[str]:
     """Why these two runs cannot be diffed as-is (empty list = they can)."""
-    problems, modes, asked = [], [], []
+    problems, modes, asked, specs = [], [], [], []
     for label, path in (("--old", old_path), ("--new", new_path)):
         meta = _meta(path)
         if meta is None:
@@ -130,6 +131,10 @@ def check_comparable(old_path: str, new_path: str) -> List[str]:
             continue
         modes.append(meta.get("mode"))
         asked.append(meta.get("queries_sha256"))
+        specs.append(meta.get("query_spec"))
+        if meta.get("query_spec") is None:
+            problems.append(f"{label} ({path}) records no query_spec (filters, --details "
+                            f"reach), so what it asked cannot be compared")
         bad = _digest_mismatch(path, meta)
         if bad:
             problems.append(f"{label} ({path}) {bad}")
@@ -141,6 +146,10 @@ def check_comparable(old_path: str, new_path: str) -> List[str]:
         problems.append("the runs asked different questions (different --cad-number / "
                         "--input / --address), so an object in one input and not the "
                         "other would read as added or removed")
+    if len(specs) == 2 and None not in specs and specs[0] != specs[1]:
+        diff = {k: (specs[0].get(k), specs[1].get(k)) for k in set(specs[0]) | set(specs[1])
+                if specs[0].get(k) != specs[1].get(k)}
+        problems.append(f"the runs asked differently shaped questions: {diff}")
     if len(modes) == 2 and modes[0] != modes[1]:
         problems.append(f"the runs are different modes ({modes[0]} vs {modes[1]})")
     return problems

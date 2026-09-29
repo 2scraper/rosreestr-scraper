@@ -79,6 +79,8 @@ SEARCH_TIMEOUT = 25.0
 NEW_IMAGE_TIMEOUT = 6.0
 # How long --mode scan keeps looking at a page before saying "no captcha".
 SCAN_SETTLE = 10.0
+# How long after a solve before the page is re-read to see if the challenge left.
+SCAN_VERIFY_WAIT = 3.0
 
 
 @dataclass
@@ -247,12 +249,21 @@ def _solve_paid(session, args, solver: Solver, budget: Budget,
     # one — so the counter is the bill, not the number of attempts made.
     if not budget.take():
         return CaptchaState(), "captcha_budget_exhausted"
-    outcome.captcha_solves += 1
     try:
         sol = solver.solve_image(solver.api_key, image)
+    except captcha_solver.ImageTaskNotCreated as e:
+        # Refused before a task existed: no charge, so no solve is counted.
+        logger.warning("2Captcha did not accept the task: %s", e)
+        return CaptchaState(), "captcha_solver_error"
     except (RuntimeError, TimeoutError) as e:
+        outcome.captcha_solves += 1      # a task was created
         logger.warning("2Captcha could not read the image: %s", e)
         return CaptchaState(), "captcha_solver_error"
+    outcome.captcha_solves += 1
+    try:
+        outcome.captcha_cost += float(sol.cost or 0)
+    except (TypeError, ValueError):
+        pass
     since = _last_n(session)
     session.set_captcha(sol.text)
     status = _check_status(session, since, sol.text)
@@ -309,7 +320,7 @@ def _click(session) -> bool:
 
 
 def lookup_one(session, args, solver: Solver, budget: Budget, index: int,
-               query: str) -> QueryOutcome:
+               query: str, outcome: Optional[QueryOutcome] = None) -> QueryOutcome:
     """Look up one cadastral number. Never raises for a site-shaped failure.
 
     Rounds (--retries + 1) repeat what is transient — no answer to the
@@ -318,7 +329,9 @@ def lookup_one(session, args, solver: Solver, budget: Budget, index: int,
     --captcha-attempts ends the query: more rounds would only buy more of
     the same refusals.
     """
-    outcome = QueryOutcome(index=index, query=query)
+    # The caller may hand in the outcome, so the solves and rejections counted
+    # here survive a driver error part-way through (third-party audit).
+    outcome = outcome if outcome is not None else QueryOutcome(index=index, query=query)
     number = ra.normalise_cad_number(query)
     _await_fresh_image(session)
     for round_ in range(args.retries + 1):
@@ -367,9 +380,20 @@ def lookup_one(session, args, solver: Solver, budget: Budget, index: int,
             continue
         kind, data = ra.classify_on(hit.get("s"), hit.get("body"))
         if kind == ra.ANSWERED:
+            records, bad = ra.parse_on_checked(data, query=query, index=index)
+            if bad and not records:
+                # Every element was the wrong shape: the site answered, but
+                # nothing here can be read — a failure, never "not found".
+                outcome.malformed += bad
+                outcome.reason = "lookup_unreadable_elements"
+                continue
             outcome.answered, outcome.reason, outcome.blocked = True, None, False
-            outcome.records = ra.parse_on(data, query=query, index=index)
-            outcome.found = len(outcome.records)
+            outcome.records = records
+            outcome.found = len(records)
+            if bad:
+                outcome.malformed += bad
+                logger.warning("query %d: %d element(s) of the answer were not records "
+                               "and were left out (malformed_rows in the sidecar).", index, bad)
             if state.task_id is not None and args.report_correct:
                 solver.report(solver.api_key, state.task_id, True)
             return outcome
@@ -400,8 +424,9 @@ def run_cadastral(session, args, solver: Solver, budget: Budget,
     for offset, q in enumerate(queries):
         if deadline_reached():
             return outcomes, "interrupted"
+        o = QueryOutcome(index=start_index + offset, query=q)
         try:
-            o = lookup_one(session, args, solver, budget, start_index + offset, q)
+            lookup_one(session, args, solver, budget, start_index + offset, q, outcome=o)
         except Exception as e:  # noqa: BLE001 — a driver error on ONE query
             # A selector that stopped matching or a page that died mid-query
             # fails that query, loudly, and the run goes on; a traceback and
@@ -410,8 +435,9 @@ def run_cadastral(session, args, solver: Solver, budget: Budget,
             logger.error("query %d raised: %s", start_index + offset,
                          redact_secret_patterns(str(e)).splitlines()[0][:300])
             logger.debug("traceback", exc_info=True)
-            o = QueryOutcome(index=start_index + offset, query=q,
-                             reason="page_fetch_raised")
+            # The same outcome object, so what this query already cost is kept.
+            if not o.answered:
+                o.reason = "page_fetch_raised"
         outcomes.append(o)
         if args.dump_html:
             # On success too: a right count with a column silently empty is
@@ -421,7 +447,7 @@ def run_cadastral(session, args, solver: Solver, budget: Budget,
             # was parsed from, and the source of any new fixture.
             import os
             dump_json(os.path.join(args.dump_html, f"query{start_index + offset}.net.json"),
-                      session.net_entries())
+                      scrub_net_entries(session.net_entries()))
         logger.info("query %d/%d %s: %s", start_index + offset,
                     start_index + len(queries) - 1, q,
                     f"{len(o.records)} record(s)" if o.answered else f"FAILED ({o.reason})")
@@ -466,10 +492,21 @@ def run_address(session, args, index: int, address: str) -> Tuple[QueryOutcome, 
         status, body = _fetch(session, url)
         if status == 200 and body is not None:
             try:
-                outcome.records = ra.parse_address_search(body, query=address, index=index)
-            except ValueError:
+                records, bad = ra.parse_address_search_checked(body, query=address, index=index)
+            except ra.UnreadableAnswer as e:
+                # {"error": ...} and friends: a failure, never "no objects here".
+                logger.warning("address search %r: %s", address, e)
                 outcome.reason = "address_search_unreadable"
                 continue
+            if bad and not records:
+                outcome.malformed += bad
+                outcome.reason = "address_search_unreadable_lines"
+                continue
+            outcome.records = records
+            if bad:
+                outcome.malformed += bad
+                logger.warning("address search %r: %d line(s) had no cadastral number and "
+                               "were left out (malformed_rows in the sidecar).", address, bad)
             outcome.answered, outcome.reason = True, None
             served = len(outcome.records)
             outcome.found = served
@@ -556,7 +593,11 @@ class ScanResult:
     widget: Optional[str] = None          # "turnstile" / "recaptcha_v2" / ...
     sitekey: Optional[str] = None
     autosolve_events: List[str] = field(default_factory=list)
-    solved: Optional[bool] = None
+    # Three different claims, kept apart (template §23: "we solved it" and
+    # "the token got in" are different claims):
+    token_injected: bool = False           # a 2Captcha token was put in the page
+    site_verified: Optional[bool] = None   # the challenge is GONE when re-read
+    solved: Optional[bool] = None          # == site_verified; never set on faith
     error: Optional[str] = None
 
 
@@ -598,19 +639,57 @@ def scan_page(session, args, solver: Solver, budget: Budget, url: str) -> ScanRe
     if (challenge or res.image_captcha) and getattr(session, "autosolve", False):
         session.wait(args.autosolve_wait)
     res.autosolve_events = [str(e) for e in session.autosolve_events[events_before:]]
-    if any("solveFinished" in e for e in res.autosolve_events):
-        res.solved = True
-    elif challenge and challenge.sitekey and args.solve_captcha != "never":
+    attempted = any("solveFinished" in e for e in res.autosolve_events)
+    if not attempted and challenge and challenge.sitekey and args.solve_captcha != "never":
         if solver.api_key and budget.take():
             try:
                 token = captcha_solver.solve(challenge, solver.api_key)
                 session.inject_token(token)
-                res.solved = True
+                res.token_injected = attempted = True
             except (RuntimeError, TimeoutError) as e:
                 logger.warning("2Captcha could not solve the %s on %s: %s",
                                challenge.kind, url, e)
-                res.solved = False
+                res.solved = res.site_verified = False
+    if attempted and challenge:
+        # Neither Captcha.solveFinished nor a token in the page proves the
+        # site accepted anything. Read the page again: solved means the
+        # widget is no longer there (third-party audit, 2026-09-29).
+        session.wait(SCAN_VERIFY_WAIT)
+        html2 = session.html()
+        still = (captcha_solver.detect_in_html(html2, url)
+                 or captcha_solver.challenge_from_discovery(session.runtime_captcha_info(), url))
+        res.site_verified = res.solved = still is None
+        if still is not None:
+            logger.info("scan %s: a token/auto-solve was applied but the %s is still on "
+                        "the page — not reported as solved.", url, still.kind)
     return res
+
+
+def scrub_net_entries(entries: List[dict]) -> List[dict]:
+    """The page's traffic with the cadastral engineer's name, phone and
+    certificate number replaced — the same fields make_fixtures.py scrubs.
+
+    Keeping them out of the Record was not enough: --dump-html wrote the raw
+    /on body, personal fields included (third-party audit, 2026-09-29).
+    """
+    import copy
+    from rosreestr_api import PERSONAL_FIELDS, SCRUBBED
+    out = copy.deepcopy(entries)
+    for e in out:
+        body = e.get("body")
+        if not isinstance(body, str) or not any(f in body for f in PERSONAL_FIELDS):
+            continue
+        try:
+            data = json.loads(body)
+        except ValueError:
+            continue
+        for el in (data.get("elements") or []) if isinstance(data, dict) else []:
+            if isinstance(el, dict):
+                for f in PERSONAL_FIELDS:
+                    if el.get(f) is not None:
+                        el[f] = SCRUBBED
+        e["body"] = json.dumps(data, ensure_ascii=False)
+    return out
 
 
 def dump_json(path: str, data) -> None:

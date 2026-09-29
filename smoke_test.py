@@ -21,7 +21,7 @@ developer's credentials or reach the network. No check sleeps for real.
 The fixtures are real lk.rosreestr.ru answers (fixtures.json, cut by
 make_fixtures.py from a live probe on 2026-09-29) — not verbatim in one
 respect: the cadastral engineer's name/phone/certificate are replaced with
-"{scrubbed}". The code dictionaries (rosreestr_codes.json) are the site's own.
+"{scrubbed}". The code dictionaries (rosreestr_codes.py) are the site's own.
 The one thing built inline is FakeSite below: the site's measured BEHAVIOUR
 (one-use captcha, the check GET, a fresh image after every search) around
 those real bodies, so the shared flow can be driven without a browser.
@@ -458,7 +458,9 @@ _last_meta_path = [None]
 
 
 def run_fake(argv, site, solver, key="k" * 32):
-    extra = ["--out", os.path.join(tempfile.mkdtemp(), "o"), "--delay", "0", "--retry-delay", "0"]
+    extra = ["--out", os.path.join(tempfile.mkdtemp(), "o"), "--retry-delay", "0"]
+    if "--delay" not in argv:          # a test that sets its own delay keeps it
+        extra += ["--delay", "0"]
     if key:
         extra += ["--twocaptcha-key", key]
     with redirect_stdout(io.StringIO()):
@@ -774,6 +776,162 @@ def check_engine_without_cdp():
                 os.environ[k] = v
 
 
+def check_audit_2026_09_29():
+    """The third-party audit of 2026-09-29, one check per finding — each
+    driven through the shared flow and finish_run, not the parser alone."""
+    print("\n[third-party audit 2026-09-29]")
+
+    # 1. A malformed answer is a failure, never "nothing found".
+    class BadAddress(FakeSite):
+        def fetch_text(self, url):
+            return (200, '{"error":"temporarily unavailable"}') if "/address/search" in url \
+                else super().fetch_text(url)
+    rc, m = run_fake(["--mode", "address", "--address", "A", "--allow-empty", "--retries", "0"],
+                     BadAddress(), FakeSolver())
+    eq("an error OBJECT from the address search is exit 5, even with --allow-empty",
+       (rc, m), (EXIT_FETCH_FAILED, None))
+    eq("a 400 carrying {elements: []} is not an answer", ra.classify_on(400, '{"elements":[]}')[0],
+       ra.UNREADABLE)
+
+    class BadElements(FakeSite):
+        def __init__(self, body, **kw):
+            super().__init__(**kw)
+            self.body = body
+
+        def click_search(self):
+            super().click_search()
+            for e in reversed(self.net):
+                if e["u"].endswith("/on") and e["s"] == 200:
+                    e["body"] = self.body
+                    break
+    rc, m = run_fake(["--cad-number", KN, "--retries", "0", "--allow-empty"],
+                     BadElements('{"elements":[{"bad":"shape"}],"count":1}'), FakeSolver())
+    eq("an answer whose every element is malformed fails the query (exit 5)", (rc, m), (EXIT_FETCH_FAILED, None))
+    good = json.loads(FX["on_found"]["body"])["elements"][0]
+    mixed = json.dumps({"elements": [good, {"bad": "shape"}], "count": 2}, ensure_ascii=False)
+    rc, m = run_fake(["--cad-number", KN], BadElements(mixed), FakeSolver())
+    eq("a partly malformed answer keeps its good row and counts the loss",
+       (rc, m["records"], m["malformed_rows"]), (0, 1, 1))
+
+    # 3. The code dictionaries are a module (they ship in the wheel), and
+    #    rosreestr_api reads no file from disk to decode them.
+    tree = ast.parse(open(os.path.join(REPO, "rosreestr_api.py"), encoding="utf-8").read())
+    reads = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Name) and n.func.id == "open")
+        or (isinstance(n.func, ast.Attribute) and n.func.attr in ("read_text", "read_bytes")))]
+    check("rosreestr_api decodes without opening any file" + (f" (lines {reads})" if reads else ""),
+          not reads)
+    check("the dictionaries are the rosreestr_codes MODULE, not a JSON file beside it",
+          os.path.exists(os.path.join(REPO, "rosreestr_codes.py"))
+          and not os.path.exists(os.path.join(REPO, "rosreestr_codes.json")))
+
+    # 4. A full record beats a list line of the same object, in its place.
+    o1 = QueryOutcome(index=1, query="A", answered=True,
+                      records=[Record(sku="1:1:1:1", detail_level="list"),
+                               Record(sku="1:1:1:2", detail_level="list")])
+    o2 = QueryOutcome(index=2, query="B", answered=True,
+                      records=[Record(sku="1:1:1:1", detail_level="full", price=123.0)])
+    _, _, out = _finish([o1, o2], 2)
+    rows = json.load(open(out + ".json"))
+    eq("list(A) then full(B) of one object keeps the FULL record, where A put it",
+       [(r["sku"], r["detail_level"], r["price"]) for r in rows],
+       [("1:1:1:1", "full", 123.0), ("1:1:1:2", "list", None)])
+    site, sol = FakeSite(known=(KN, "77:01:0001044:2981")), FakeSolver()
+    rc, m = run_fake(["--mode", "address", "--address", "A", "--address", "A", "--details",
+                      "--max-objects", "1"], site, sol)
+    eq("an object already bought in full is not paid for again by an overlapping address",
+       (m["captcha_solves"], sol.calls), (1, 1))
+
+    # 5. What a query cost survives a driver error after the solve, and a
+    #    task 2Captcha refused to create is not counted as a solve.
+    class DiesOnce(FakeSite):
+        died = False
+
+        def set_captcha(self, text):
+            if text and not self.died:
+                self.died = True
+                raise RuntimeError("driver died after the solve")
+            super().set_captcha(text)
+    site, sol = DiesOnce(known=(KN, "77:01:0001044:2981")), FakeSolver()
+    rc, m = run_fake(["--cad-number", KN, "--cad-number", "77:01:0001044:2981"], site, sol)
+    eq("a solve bought before a driver error is still in the sidecar",
+       (m["captcha_solves"], sol.calls), (2, 2))
+
+    class NoTask(FakeSolver):
+        def solve_image(self, key, image):
+            self.calls += 1
+            raise captcha_solver.ImageTaskNotCreated("createTask failed: ERROR_ZERO_BALANCE")
+    site2 = FakeSite()
+    rc, m = run_fake(["--mode", "address", "--address", "A", "--details", "--max-objects", "1",
+                      "--captcha-attempts", "2"], site2, NoTask())
+    eq("createTask refusals are not counted as paid solves", m["captcha_solves"], 0)
+
+    class Costed(FakeSolver):
+        def solve_image(self, key, image):
+            sol_ = super().solve_image(key, image)
+            sol_.cost = "0.001"
+            return sol_
+    rc, m = run_fake(["--cad-number", KN], FakeSite(), Costed())
+    eq("the sidecar carries 2Captcha's own reported cost", m["captcha_cost"], 0.001)
+
+    # 6. A scan reports "solved" only when the challenge is gone.
+    widget = '<div class="cf-turnstile" data-sitekey="0x4AAAAAAABkMYinukE8nzY"></div>'
+
+    class Challenge(FakeSite):
+        def __init__(self, clears):
+            super().__init__()
+            self.clears, self.injected = clears, False
+
+        def goto(self, url):
+            return 200, widget
+
+        def html(self):
+            return "<html>ok</html>" if (self.injected and self.clears) else widget
+
+        def inject_token(self, token):
+            self.injected = True
+    orig = captcha_solver.solve
+    captcha_solver.solve = lambda c, k, **kw: "token"
+    try:
+        for clears, want in ((False, False), (True, True)):
+            r = lookup_flow.scan_page(Challenge(clears), argparse_ns(autosolve_wait=0, solve_captcha="auto"),
+                                      lookup_flow.Solver(api_key="k" * 32), lookup_flow.Budget(limit=3),
+                                      "https://x")
+            eq(f"scan: token injected, challenge {'gone' if clears else 'still there'} -> solved={want}",
+               (r.token_injected, r.solved), (True, want))
+    finally:
+        captcha_solver.solve = orig
+
+    # 7. --delay between addresses; per-page rotation refused where unimplemented.
+    waits = []
+
+    class Timed(FakeSite):
+        def wait(self, s):
+            waits.append(s)
+            super().wait(s)
+    run_fake(["--mode", "address", "--address", "A", "--address", "B", "--delay", "7"],
+             Timed(), FakeSolver())
+    check("--delay is applied between addresses", 7 in waits)
+    check("--proxy-rotate per-page outside --mode cadastral is refused",
+          _refused(["--mode", "address", "--address", "A", "--proxy-rotate", "per-page"]))
+
+    # 8. The traffic dump carries no engineer data; the raw status code is kept.
+    planted = json.loads(FX["on_found"]["body"])
+    planted["elements"][0]["cadEngPhone"] = "8" + "9991234567"
+    dumped = lookup_flow.scrub_net_entries([{"u": "/account-back/on", "body": json.dumps(planted)}])
+    check("--dump-html's traffic dump scrubs the engineer's phone",
+          "9991234567" not in json.dumps(dumped))
+    el = dict(json.loads(FX["on_found"]["body"])["elements"][0], status="7")
+    r = ra.record_from_element(el, query=KN, index=1, position=1)
+    eq("an unknown status code is kept verbatim beside its mapped status", (r.status, r.status_code),
+       ("cancelled", "7"))
+
+
+def argparse_ns(**kw):
+    import argparse
+    return argparse.Namespace(**kw)
+
+
 def check_engines_share_one_cli():
     print("\n[engine parity]")
     for name in ("playwright_scraper", "puppeteer_scraper", "selenium_scraper"):
@@ -897,11 +1055,14 @@ def check_diff_refuses_artefacts():
     print("\n[diff_runs]")
     d = tempfile.mkdtemp()
 
-    def run(name, outcomes, requested):
+    base_spec = {"spec_version": 1, "url": ra.PAGE_URL, "mode": "cadastral",
+                 "list_kind": None, "details": False, "max_objects": None}
+
+    def run(name, outcomes, requested, spec=base_spec):
         prefix = os.path.join(d, name)
         with redirect_stdout(io.StringIO()):
             finish_run(outcomes, prefix, "json", False, mode="cadastral", engine="t",
-                       queries_requested=requested)
+                       queries_requested=requested, spec=spec)
         return prefix + ".json"
 
     a = run("a", [_outcome(1), _outcome(2)], 2)
@@ -917,6 +1078,14 @@ def check_diff_refuses_artefacts():
     eq("a re-valuation is a change", len(diff_runs.diff_rows(old, new)["changed"]), 1)
     lst = [asdict(Record(sku="1", detail_level="list"))]
     eq("a list line vs a full record is not a change", diff_runs.diff_rows(lst, new)["changed"], [])
+    # The same input under another filter is another question (audit #2).
+    parcel = run("parcel", [_outcome(1), _outcome(2)], 2, dict(base_spec, list_kind=["PARCEL"]))
+    flat = run("flat", [_outcome(1), _outcome(2)], 2, dict(base_spec, list_kind=["FLAT"]))
+    check("one input under two --list-kind filters is refused",
+          any("differently shaped" in x for x in diff_runs.check_comparable(parcel, flat)))
+    nospec = run("nospec", [_outcome(1), _outcome(2)], 2, None)
+    check("a run that records no query_spec is refused",
+          any("no query_spec" in x for x in diff_runs.check_comparable(nospec, b)))
     lone = os.path.join(d, "lone.json")
     open(lone, "w").write("[]")
     check("a file with no sidecar is refused — nothing vouches for it",
@@ -1136,7 +1305,7 @@ def check_dockerfile_copies_what_it_imports():
                 queue.append(node.module)
             elif isinstance(node, ast.Import):
                 queue += [a.name for a in node.names if a.name in local]
-    missing = ({f"{m}.py" for m in needed} | {"rosreestr_codes.json"}) - copied
+    missing = {f"{m}.py" for m in needed} - copied
     check("the image carries every module the entrypoint imports, and the code snapshot"
           + (f" (missing {sorted(missing)})" if missing else ""), not missing)
     check("and no test suite or fixtures", not ({"smoke_test.py", "fixtures.json"} & copied))
@@ -1197,7 +1366,10 @@ def check_supply_chain():
               + (f" (not: {loose})" if loose else ""), not loose)
         code = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
         installs = re.findall(r"pip install ([^\n]+)", code)
-        bad = [i for i in installs if "--require-hashes" not in i or ".lock" not in i]
+        # One exception, and only this shape: installing the wheel the job
+        # itself just built, with --no-deps, downloads nothing.
+        bad = [i for i in installs if ("--require-hashes" not in i or ".lock" not in i)
+               and not (i.strip().startswith("--no-deps dist/") and i.strip().endswith(".whl"))]
         check(f"{name}: pip installs only hash-checked locks" + (f" (not: {bad})" if bad else ""),
               not bad)
     # A pipe in a `run:` step hides the left side's failure unless pipefail
@@ -1244,7 +1416,7 @@ def check_sample_output():
     # image need must be negated — one was not, and was therefore neither
     # committable nor secret-scanned.
     if shutil.which("git") and os.path.isdir(os.path.join(REPO, ".git")):
-        for name in ("fixtures.json", "rosreestr_codes.json", "sample_output.json",
+        for name in ("fixtures.json", "rosreestr_codes.py", "sample_output.json",
                      "sample_output.csv", ".env.example"):
             r = subprocess.run(["git", "check-ignore", "-q", name], cwd=REPO)
             check(f"{name} is not git-ignored", r.returncode == 1)
@@ -1283,7 +1455,8 @@ def main(argv=None) -> int:
     groups = [check_full_record_values, check_personal_data_is_never_read,
               check_answer_classification, check_address_search, check_numbers_and_codes,
               check_page_recognition, check_exit_codes, check_csv_safety,
-              check_flow_on_measured_behaviour, check_budget_has_one_gate,
+              check_flow_on_measured_behaviour, check_audit_2026_09_29,
+              check_budget_has_one_gate,
               check_cli_contract, check_rotation_survives_a_failed_launch,
               check_engine_without_cdp, check_engines_share_one_cli, check_env_contract,
               check_credentials_never_leak, check_cdp_connect_policy,

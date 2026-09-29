@@ -21,7 +21,7 @@ output from a check that actually ran, and it inflates the count the README
 used to quote.
 
 The fixtures are `fixtures.json` — real `lk.rosreestr.ru` answers — and
-`rosreestr_codes.json`, the site's own code dictionaries. Both are cut by
+`rosreestr_codes.py`, the site's own code dictionaries (a generated module). Both are cut by
 `make_fixtures.py` from a live probe log that is NOT in the repository: a
 full record carries the cadastral engineer's name and phone (a private
 person), and `make_fixtures.py` replaces them with `{scrubbed}` before

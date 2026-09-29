@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --require-hashes -r requirements-playwright.lock 
 # every invocation, --help included, because one module was missing here.
 COPY captcha_solver.py cli.py env_config.py fingerprint_client.py \
      lookup_flow.py output_writer.py playwright_scraper.py proxy_pool.py \
-     rosreestr_api.py rosreestr_codes.json diff_runs.py ./
+     rosreestr_api.py rosreestr_codes.py diff_runs.py ./
 
 ENTRYPOINT ["python3", "playwright_scraper.py"]
 CMD ["--help"]

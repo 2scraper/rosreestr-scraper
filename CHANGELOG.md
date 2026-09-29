@@ -4,6 +4,70 @@ Keep a Changelog format, and SemVer as closely as a CLI toolkit can manage:
 a patch release means fixes, not a promise that no default ever moves — a
 behaviour change in one is announced at the top of its notes.
 
+## [Unreleased]
+
+Fixes from a third-party audit of 0.1.0 (2026-09-29), each reproduced on
+`main` before it was changed, each pinned by a check that goes red when the
+old defect is planted back.
+
+> **Behaviour changes for an existing user:**
+>
+> - A malformed answer — an error object from the address search, a non-2xx
+>   status, records without a cadastral number — is now a **failure** (exit
+>   5, or 6 in a run that got other answers). 0.1.0 read it as "nothing
+>   found", and with `--allow-empty` wrote an empty table marked complete.
+> - `diff_runs.py` now refuses a run without the new `query_spec`, which
+>   includes every 0.1.0 output. Re-run both sides, or pass `--force`.
+> - `--proxy-rotate per-page` outside `--mode cadastral` is a usage error;
+>   it was silently ignored.
+
+### Fixed
+
+- **A malformed answer read as "not found".** The address search's answer
+  must be a JSON array and `/on`'s status must be 2xx; elements without a
+  cadastral number are counted in `malformed_rows` instead of vanishing, and
+  an answer holding nothing readable fails the query.
+- **`diff_runs.py` compared two different questions.** The sidecar records a
+  `query_spec` (service URL, mode, `--list-kind`, `--details`,
+  `--max-objects`), and a diff requires it to match — a PARCEL-only and a
+  FLAT-only run of one address are not a before and an after.
+- **The wheel could not decode anything.** The code dictionaries were a JSON
+  file beside the scripts, left out of the wheel (`FileNotFoundError` in any
+  installed copy). They are now the generated module `rosreestr_codes.py`,
+  and CI builds the wheel, installs it in a clean venv and decodes outside
+  the checkout.
+- **A list line could replace a paid full record.** When two addresses
+  overlap, the full record now wins, in the place the object first
+  appeared, and an object already fetched in full is not paid for again.
+- **What a query cost could vanish.** Solves counted before a driver error
+  are kept; a task 2Captcha refused to create is no longer counted as a
+  solve; the sidecar carries 2Captcha's own reported `captcha_cost`.
+- **`--mode scan` claimed "solved" on faith.** It now re-reads the page and
+  reports `solved` only when the challenge is gone (`token_injected` and
+  `site_verified` are separate fields).
+- **`--delay` did not apply between addresses**, nor between numbers under
+  `--proxy-rotate per-page`.
+- **`--dump-html` wrote the cadastral engineer's name and phone** into the
+  traffic dump (`queryN.net.json`); they are now scrubbed there as in the
+  fixtures.
+
+### Added
+
+- `status_code`: the site's raw status code beside the mapped `status`, so
+  a code nobody has seen is kept rather than folded into "cancelled".
+
+### Not changed, and why
+
+- **A scheduled canary.** GitHub runners are outside Russia and Scraping
+  Browser credentials expire in about a day, so a schedule would go red on
+  a stale secret rather than on the site; it stays dispatch-only.
+- **A landing page in this repository.** The landing page is for
+  2captcha.com and lives beside the repository, as in the rest of the family.
+- **An HTTP transport, a `Protocol` for the session, checkpoints.** Worth
+  doing, not fixes. A plain HTTP client through the Russian proxy did not
+  get through when tried during 0.1.0's development, so an HTTP transport
+  needs its own measurement before anything is claimed.
+
 ## [0.1.0] — 2026-09-29
 
 First release.

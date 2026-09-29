@@ -162,7 +162,8 @@ def build_parser(engine: str, doc: str) -> argparse.ArgumentParser:
     net.add_argument("--proxy", help="one proxy URL (prefer ROSREESTR_PROXY in .env)")
     net.add_argument("--proxy-file", help="a file of proxy URLs, one per line")
     net.add_argument("--proxy-rotate", choices=("per-run", "per-page"), default="per-run",
-                     help="per-page = a fresh browser on the next exit for every query")
+                     help="per-page = a fresh browser on the next exit for every cadastral "
+                          "number (--mode cadastral only)")
     net.add_argument("--proxy-shuffle", action="store_true")
     head = net.add_mutually_exclusive_group()
     head.add_argument("--headless", dest="headless", action="store_true", default=True)
@@ -232,6 +233,10 @@ def parse_args(engine: str, doc: str, argv=None, supports_cdp: bool = True):
                      "Fingerprint API answers 400 to a list.")
     if args.solve_captcha == "never":
         args.twocaptcha_key = None
+    if args.proxy_rotate == "per-page" and args.mode != "cadastral":
+        # Implemented for the one route that has a query per browser worth
+        # rotating; refused elsewhere rather than silently ignored (audit #7).
+        parser.error("--proxy-rotate per-page is implemented for --mode cadastral only.")
     if args.mode == "cadastral":
         if not (args.cad_number or args.input):
             parser.error("--mode cadastral needs --cad-number or --input")
@@ -251,6 +256,18 @@ def parse_args(engine: str, doc: str, argv=None, supports_cdp: bool = True):
             len(args.address or []) * args.max_objects if args.details else 1)
         args.max_solves = max(1, n) * args.captcha_attempts
     return args
+
+
+def query_spec(args) -> dict:
+    """What a run ASKED, beyond its input lines — recorded in the sidecar and
+    compared by diff_runs.py. Two runs are one question only if these agree."""
+    details = bool(getattr(args, "details", False))
+    return {"spec_version": 1,
+            "url": args.url,
+            "mode": args.mode,
+            "list_kind": sorted(getattr(args, "list_kind", None) or []) or None,
+            "details": details,
+            "max_objects": args.max_objects if details else None}
 
 
 class _Interrupt:
@@ -329,7 +346,7 @@ def run(args, open_session: Callable, engine: str) -> int:
         return ow.finish_run(outcomes, args.out, args.format, args.allow_empty,
                              mode=args.mode, engine=engine,
                              queries_requested=len(args.queries),
-                             stop_reason=stop_reason)
+                             stop_reason=stop_reason, spec=query_spec(args))
     finally:
         logger.info("Paid captcha solves this run: %d (cap %d). %.0fs.",
                     budget.spent, budget.limit, time.monotonic() - started)
@@ -357,6 +374,13 @@ def _run_cadastral_rotating(args, holder, pool, solver, budget, queries,
         if interrupt.hit:
             return outcomes, "interrupted"
         if offset:
+            if args.delay > 0:
+                # run_cadastral gets one number at a time here, so its own
+                # between-numbers delay never fires; apply --delay here.
+                if holder[0] is not None:
+                    holder[0].wait(args.delay)
+                else:
+                    time.sleep(args.delay)
             pool.advance("per-page rotation")
             try:
                 holder[0].close()
@@ -397,6 +421,9 @@ def _run_address(args, session, solver, budget, engine, interrupt) -> int:
         if interrupt.hit:
             stop_reason = "interrupted"
             break
+        if visited and args.delay > 0:
+            # --delay between addresses too, not only between numbers (audit #7).
+            session.wait(args.delay)
         visited += 1
         o, n = lookup_flow.run_address(session, args, index, address)
         outcomes.append(o)
@@ -406,6 +433,13 @@ def _run_address(args, session, solver, budget, engine, interrupt) -> int:
                     f"{n} object(s) listed" if o.answered else f"FAILED ({o.reason})")
         if args.details and o.answered and o.records:
             numbers = [r.sku for r in o.records][:args.max_objects]
+            # A number already fetched in full earlier in THIS run is not paid
+            # for again; the merge puts that record in this address's place.
+            bought = {r.sku for x in outcomes for r in x.records if r.detail_level == "full"}
+            if bought & set(numbers):
+                logger.info("%d object(s) at %r were already fetched in full this run; "
+                            "not paying for them again.", len(bought & set(numbers)), address)
+            numbers = [n for n in numbers if n not in bought]
             planned += len(numbers)
             if len(o.records) > args.max_objects:
                 logger.info("Fetching full records for the first %d of %d "
@@ -429,7 +463,8 @@ def _run_address(args, session, solver, budget, engine, interrupt) -> int:
     return ow.finish_run(outcomes, args.out, args.format, args.allow_empty,
                          mode="address" + ("+details" if args.details else ""),
                          engine=engine, queries_requested=requested,
-                         stop_reason=stop_reason, address_results=total)
+                         stop_reason=stop_reason, address_results=total,
+                         spec=query_spec(args))
 
 
 def _put_full_records_in_place(address_outcome, detail_outcomes) -> None:
@@ -483,7 +518,7 @@ def _finish_failed(args, engine, stop) -> int:
     outcomes = []
     return ow.finish_run(outcomes, args.out, args.format, args.allow_empty,
                          mode=args.mode, engine=engine, queries_requested=max(n, 1),
-                         stop_reason=stop)
+                         stop_reason=stop, spec=query_spec(args))
 
 
 def main(engine: str, doc: str, open_session: Callable, argv=None,
