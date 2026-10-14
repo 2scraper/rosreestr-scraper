@@ -63,7 +63,7 @@ jobs:
           assert len(codes.get("OBJECT_TYPE_CODES", {})) == 9, "the nine object kinds changed"
           print(f"canary OK: {len(rows)} address lines, {len(codes)} dictionaries")
           PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && env.HAS_EXIT == 'true'
         with:
           name: canary-free
