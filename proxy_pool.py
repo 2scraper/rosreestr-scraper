@@ -425,7 +425,7 @@ def from_args(args) -> Optional[ProxyPool]:
 # ---------------------------------------------------------------------------
 # Connecting to the Scraping Browser API — one policy for every engine
 # ---------------------------------------------------------------------------
-# Measured in the family (template §26, 2026-09-24): a profile stays
+# Measured in a sibling repo (2026-09-24): a profile stays
 # `profile_locked` for 1.6-1.9 s after a CLEAN disconnect, so a second run
 # started straight after the first was refused with HTTP 500. Three attempts
 # 3 s apart ride that out, while a profile genuinely held by another run
@@ -459,8 +459,8 @@ def cdp_refusal_advice(error_text: str) -> str:
                 "one live connection per pid. Wait for the other run to finish, or "
                 "give each concurrent run its own pid.")
     if _has_status(text, "401"):
-        return ("HTTP 401: the profile's credentials were refused — they expire "
-                "(about a day). Take fresh ones from the 2Captcha dashboard.")
+        return ("HTTP 401: the profile's credentials were refused — they expire. "
+                "Take fresh ones from the 2Captcha dashboard.")
     if _has_status(text, "403"):
         return "HTTP 403: this account may not use that profile or zone."
     if _has_status(text, "500", "502", "503"):

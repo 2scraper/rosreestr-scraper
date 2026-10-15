@@ -47,6 +47,10 @@ jobs:
         # cleared while the pyppeteer engine exists. They are ignored BY ID,
         # not by package: any NEW advisory in this lock still fails the job.
         # README says what this means for someone running that engine.
+        # Two more, published early October 2026 (PYSEC-2026-4175 and -4177,
+        # fix 2.8.0) turned the weekly run red on 2026-10-05 and 2026-10-12;
+        # 1.26.20 is still the last 1.x release (checked on PyPI 2026-10-15),
+        # so there is no compatible pin, and they are ignored the same way.
         run: |
           pip-audit --progress-spinner off --require-hashes --disable-pip \
             -r requirements-puppeteer.lock \
@@ -54,4 +58,6 @@ jobs:
             --ignore-vuln PYSEC-2026-1994 \
             --ignore-vuln PYSEC-2026-1996 \
             --ignore-vuln PYSEC-2026-1998 \
-            --ignore-vuln PYSEC-2026-1999
+            --ignore-vuln PYSEC-2026-1999 \
+            --ignore-vuln PYSEC-2026-4175 \
+            --ignore-vuln PYSEC-2026-4177

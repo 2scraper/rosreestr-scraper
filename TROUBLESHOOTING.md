@@ -46,10 +46,11 @@ The Scraping Browser refused the WebSocket upgrade. Seen on every connect
 from 12:15 to 12:17 (local time) on 2026-09-29, starting right after a run on
 the same profile had ended; the next attempt, at 12:27, succeeded.
 One profile (`pid-`) holds one live connection. A sibling repo measured the
-lock lasting 1.6–1.9 s after a clean disconnect (family template §26); here
+lock lasting 1.6–1.9 s after a clean disconnect (2026-09-24); here
 the refusals went on for minutes, so a short retry does not always ride it out. The engines try 3 times, 3 s apart; a
 401 (expired credentials) is not retried. If it persists, wait a few minutes or use another `pid`. The profile's
-credentials also expire (about a day) — take fresh ones from the dashboard.
+credentials also expire (how long they last has not been measured here; a
+401 is the signal) — take fresh ones from the dashboard.
 
 ## "Loaded … but it is not the search form" — exit 5
 

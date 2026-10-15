@@ -97,7 +97,7 @@ class PlaywrightSession:
         # times in one connect error. An exception message is a log.
         # proxy_pool's CDP policy, shared with every engine in the family: a
         # profile stays locked 1.6-1.9 s after a clean disconnect (measured in a
-        # sibling repo, template §26), so a lock is retried; an expired login
+        # sibling repo, 2026-09-24), so a lock is retried; an expired login
         # (401) is not. Longer outages were seen here; the retry does not hide them.
         self.browser = None
         for attempt in range(1, CDP_CONNECT_ATTEMPTS + 1):
@@ -147,7 +147,7 @@ class PlaywrightSession:
         status, _ = self.goto(self.args.url)
         deadline = time.monotonic() + FORM_TIMEOUT_S
         # Polled through the protocol, never wait_for_function: an evaluated
-        # string is what a strict CSP forbids (family §18).
+        # string is what a strict CSP forbids.
         while time.monotonic() < deadline:
             if self.page.locator(ra.SEL_SEARCH_BUTTON).count():
                 break

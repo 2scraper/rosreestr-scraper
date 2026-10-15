@@ -326,6 +326,48 @@ def check_csv_safety():
     output_writer.write_csv([Record(sku="1", title="+7 test", rights=[{"number": "n"}])], out)
     row = next(csv.DictReader(open(out, encoding="utf-8")))
     eq("in the file too", (row["title"], row["rights"]), ("'+7 test", '[{"number": "n"}]'))
+    eq("a cell led by a line feed is neutralised too", output_writer.csv_safe("\n=1"), "'\n=1")
+    rows = [Record(sku="1", title="\n=cmd", purpose="-x", permitted_use="ok",
+                   rights=[{"number": "=n"}], price=-5.0)]
+    out2 = os.path.join(tempfile.mkdtemp(), "c2.csv")
+    eq("write_csv returns how many cells it escaped (list cells are JSON text first)",
+       output_writer.write_csv(rows, out2), 2)
+    rc, meta, prefix = _finish([QueryOutcome(index=1, query="1", answered=True, records=rows)], 1)
+    eq("the sidecar declares csv_cells_escaped", meta.get("csv_cells_escaped"), 2)
+    with open(prefix + ".json", encoding="utf-8") as f:
+        eq("...while the JSON keeps the site's text and a negative number stays a number",
+           (json.load(f)[0]["title"], rows[0].price), ("\n=cmd", -5.0))
+
+
+def check_output_file_modes():
+    """New files get 0o666 & ~umask, an existing file keeps its own mode."""
+    print("\n[output file modes]")
+    if os.name != "posix":
+        skip("output file modes", "POSIX permissions only")
+        return
+    d = tempfile.mkdtemp()
+    old = os.umask(0o022)
+    try:
+        for umask, want in ((0o022, 0o644), (0o002, 0o664), (0o077, 0o600)):
+            os.umask(umask)
+            path = os.path.join(d, f"new-{umask:o}.json")
+            output_writer.write_json([Record(sku="1")], path)
+            eq(f"a new file under umask {umask:03o} is {want:o}",
+               oct(os.stat(path).st_mode & 0o777), oct(want))
+        os.umask(0o077)
+        path = os.path.join(d, "kept.csv")
+        open(path, "w").close()
+        os.chmod(path, 0o664)
+        output_writer.write_csv([Record(sku="1")], path)
+        eq("an existing 0664 file keeps 0664 even under umask 077",
+           oct(os.stat(path).st_mode & 0o777), oct(0o664))
+        os.umask(0o022)
+        prefix = os.path.join(d, "run")
+        output_writer.write_run_meta(prefix, {"status": "complete"})
+        eq("the sidecar is 0644 under umask 022", oct(os.stat(prefix + ".meta.json").st_mode & 0o777),
+           oct(0o644))
+    finally:
+        os.umask(old)
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +559,14 @@ def check_flow_on_measured_behaviour():
 
     site, sol = FakeSite(), FakeSolver()
     rc, m = run_fake(["--cad-number", KN], site, sol, key=None)
-    eq("no key: nothing is bought, the lookup is blocked (3)", (rc, sol.calls), (EXIT_BLOCKED, 0))
+    # Was pinned as 3 until 2026-10-14. The site refused nothing: the run had
+    # no key to ask with, and exit 3 sent readers looking for a proxy.
+    eq("no key: nothing is bought, and it is 'not obtained' (5), not blocked",
+       (rc, sol.calls), (EXIT_FETCH_FAILED, 0))
+
+    site, sol = FakeSite(), FakeSolver()
+    rc, m = run_fake(["--cad-number", KN, "--max-solves", "0"], site, sol)
+    eq("--max-solves 0: nothing bought, 5 rather than blocked", (rc, sol.calls), (EXIT_FETCH_FAILED, 0))
 
     site, sol = FakeSite(autosolve=True, autosolve_fills=True), FakeSolver()
     rc, m = run_fake(["--cad-number", KN, "--cad-number", "77:01:0001044:2981"], site, sol)
@@ -988,8 +1037,8 @@ def check_engines_share_one_cli():
                    and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"
                    and not (isinstance(n.func.value, ast.Name) and n.func.value.id in ("opts", "options"))]
         check(f"{name} adds no flag of its own (the sets cannot drift)", not parsers)
-    # The session contract, DERIVED from the code that uses it (template
-    # §26): every `session.<name>` the shared flow and the dispatcher touch.
+    # The session contract, DERIVED from the code that uses it: every
+    # `session.<name>` the shared flow and the dispatcher touch.
     # A hand-written list drifts the day the loop uses a new operation.
     names = set()
     for mod in ("lookup_flow.py", "cli.py"):
@@ -1330,6 +1379,31 @@ def check_banned_wording():
           + (f" — {hits}" if hits else ""), not hits and scanned > 20)
 
 
+def check_no_private_citations():
+    """Public files must not point readers at a document they cannot open."""
+    print("\n[no citations of private documents]")
+    banned = ["CLAUDE" + ".md", "claude_" + "2scraper", "2scraper_" + "repo_rules",
+              "play" + "book \u00a7", "template \u00a7", "family \u00a7"]
+    section = re.compile("\u00a7" + r"\s?\d")
+    scanned, hits = 0, []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}
+                   and not os.path.exists(os.path.join(root, d, "pyvenv.cfg"))]
+        for filename in files:
+            if not filename.endswith((".py", ".md", ".yml", ".yaml", ".txt", ".example",
+                                      ".toml", ".html", ".cfg")) \
+                    and filename not in ("Dockerfile", ".gitignore", ".dockerignore"):
+                continue
+            text = open(os.path.join(root, filename), encoding="utf-8", errors="replace").read()
+            scanned += 1
+            rel = os.path.relpath(os.path.join(root, filename), REPO)
+            hits += [f"{rel}: {p!r}" for p in banned if p in text]
+            if section.search(text):
+                hits.append(f"{rel}: a bare section reference")
+    check(f"no shipped file cites a private document or its sections ({scanned} files)"
+          + (f" — {hits}" if hits else ""), not hits and scanned > 20)
+
+
 def check_dockerfile_copies_what_it_imports():
     print("\n[Dockerfile]")
     dockerfile = open(os.path.join(REPO, "Dockerfile"), encoding="utf-8").read()
@@ -1497,7 +1571,8 @@ def main(argv=None) -> int:
         print(f"  SKIP  engine module {skipped}")
     groups = [check_full_record_values, check_personal_data_is_never_read,
               check_answer_classification, check_address_search, check_numbers_and_codes,
-              check_page_recognition, check_exit_codes, check_csv_safety,
+              check_page_recognition, check_exit_codes, check_csv_safety, check_output_file_modes,
+              check_no_private_citations,
               check_flow_on_measured_behaviour, check_audit_2026_09_29, check_exit_advice,
               check_budget_has_one_gate,
               check_cli_contract, check_rotation_survives_a_failed_launch,
@@ -1510,7 +1585,7 @@ def main(argv=None) -> int:
               check_dockerfile_copies_what_it_imports, check_packaging_matches_the_tree,
               check_ci_checks_are_one_implementation, check_supply_chain, check_sample_output]
     # Every check_ function must be wired: one defined and never run is a
-    # guard that looks present and is not (family §25).
+    # guard that looks present and is not.
     defined = {n for n, f in globals().items() if n.startswith("check_") and callable(f)}
     wired = {g.__name__ for g in groups} | {"check", "check_engines_end_to_end"}
     for group in groups:
@@ -1523,7 +1598,8 @@ def main(argv=None) -> int:
           + (f" (unwired: {sorted(defined - wired)})" if defined - wired else ""),
           not (defined - wired))
     print("=" * 62)
-    print(f"{len(PASSED)} passed, {len(FAILED)} failed, {len(SKIPPED)} skipped")
+    print(f"{len(PASSED)} passed, {len(FAILED)} failed, "
+          f"{len(SKIPPED) + len(SKIPPED_GROUPS)} skipped")
     for f in FAILED:
         print(f"  FAILED: {f}")
     for s in SKIPPED + [f"engine module {g}" for g in SKIPPED_GROUPS]:

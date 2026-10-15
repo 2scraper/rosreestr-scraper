@@ -124,7 +124,7 @@ class PuppeteerSession:
             logger.info("Connecting to the Scraping Browser: %s", mask(a.cdp_endpoint))
             # pyppeteer never surfaces a refused handshake (the 500 dies in its
             # receive loop): a short per-attempt timeout, proxy_pool's retry
-            # policy, and the orphaned-task traceback filtered (template §26).
+            # policy, and the orphaned-task traceback filtered.
             _quiet_refused_handshakes(self._loop)
             self.browser = None
             for attempt in range(1, CDP_CONNECT_ATTEMPTS + 1):

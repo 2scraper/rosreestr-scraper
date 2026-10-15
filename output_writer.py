@@ -140,6 +140,18 @@ def _atomic_write(path: str, write: Callable) -> None:
             write(f)
             f.flush()
             os.fsync(f.fileno())
+        # mkstemp creates the temp file 0600 and os.replace keeps that mode,
+        # so without this every output would be readable by its owner alone,
+        # unlike a plain open(path, "w"). An existing target keeps its OWN
+        # mode (someone may have tightened or widened it on purpose); a new
+        # one gets exactly what open() would give it under the umask.
+        try:
+            mode = os.stat(path).st_mode & 0o777
+        except OSError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -150,7 +162,9 @@ def _atomic_write(path: str, write: Callable) -> None:
 
 
 # A leading one of these makes a spreadsheet treat the cell as a formula.
-_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+# The tab and both newlines are here because some readers strip a leading
+# one and then evaluate whatever follows it.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def _cell(value):
@@ -177,18 +191,34 @@ def write_json(records: List[Record], path: str) -> None:
         [asdict(r) for r in records], f, ensure_ascii=False, indent=2))
 
 
-def write_csv(records: List[Record], path: str) -> None:
+def write_csv(records: List[Record], path: str) -> int:
+    """Write the CSV; return how many cells were formula-escaped.
+
+    The count goes into the sidecar as `csv_cells_escaped`, so the
+    deliberate difference between the CSV (apostrophe added) and the JSON
+    (the site's text exactly) is declared rather than discovered.
+    """
     # An empty result still gets the header row, so a consumer reads a table
     # with no rows instead of failing on a zero-byte file.
     fieldnames = list(asdict(Record()).keys())
+    escaped = [0]
 
     def _write(f):
+        escaped[0] = 0
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in records:
-            writer.writerow({k: csv_safe(_cell(v)) for k, v in asdict(r).items()})
+            row = {}
+            for k, v in asdict(r).items():
+                cell = _cell(v)
+                safe = csv_safe(cell)
+                if safe is not cell:
+                    escaped[0] += 1
+                row[k] = safe
+            writer.writerow(row)
 
     _atomic_write(path, _write)
+    return escaped[0]
 
 
 EXIT_OK = 0
@@ -269,7 +299,8 @@ def run_meta(*, status: str, stop_reason: str, mode: str, engine: str,
              queries_requested: int, duplicates_dropped: int,
              files: Optional[Dict[str, dict]] = None,
              address_results: Optional[int] = None,
-             spec: Optional[dict] = None) -> dict:
+             spec: Optional[dict] = None,
+             csv_cells_escaped: int = 0) -> dict:
     """The sidecar for a finished run.
 
     `status` is what a consumer branches on:
@@ -331,13 +362,20 @@ def run_meta(*, status: str, stop_reason: str, mode: str, engine: str,
         "malformed_rows": sum(o.malformed for o in outcomes),
         "captcha_rejected": sum(o.captcha_rejected for o in outcomes),
         "autosolved": sum(1 for o in outcomes if o.autosolved),
+        # CSV cells given a leading apostrophe because they began like a
+        # spreadsheet formula. The JSON keeps the site's text unchanged, so
+        # this is the declared difference between the two files.
+        "csv_cells_escaped": csv_cells_escaped,
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def save(records: List[Record], out_prefix: str, fmt: str,
-         allow_empty: bool = False) -> bool:
+         allow_empty: bool = False, stats: Optional[dict] = None) -> bool:
     """Write JSON/CSV. Returns True if anything was written.
+
+    When `stats` is a dict, `csv_cells_escaped` is recorded in it (0 when no
+    CSV was written).
 
     On zero records nothing is written unless `allow_empty`: a run that
     failed and wrote `[]` would destroy the last good output, and a
@@ -351,9 +389,15 @@ def save(records: List[Record], out_prefix: str, fmt: str,
     if fmt in ("json", "both"):
         write_json(records, f"{out_prefix}.json")
         print(f"[+] Saved {len(records)} rows -> {out_prefix}.json")
+    escaped = 0
     if fmt in ("csv", "both"):
-        write_csv(records, f"{out_prefix}.csv")
+        escaped = write_csv(records, f"{out_prefix}.csv")
         print(f"[+] Saved {len(records)} rows -> {out_prefix}.csv")
+        if escaped:
+            print(f"[i] {escaped} CSV cell(s) began like a spreadsheet formula and "
+                  f"were prefixed with an apostrophe (the JSON keeps the site's text).")
+    if stats is not None:
+        stats["csv_cells_escaped"] = escaped
     return True
 
 
@@ -405,13 +449,15 @@ def finish_run(outcomes: List[QueryOutcome], out_prefix: str, fmt: str,
             stop_reason = "queries_unattempted"
 
     may_write_empty = allow_empty and complete
-    wrote = save(merged, out_prefix, fmt, allow_empty=may_write_empty)
+    stats: Dict[str, int] = {}
+    wrote = save(merged, out_prefix, fmt, allow_empty=may_write_empty, stats=stats)
     if wrote:
         status = "complete" if complete else ("partial" if answered else "failed")
         write_run_meta(out_prefix, run_meta(
             status=status, stop_reason=stop_reason, mode=mode, engine=engine,
             outcomes=outcomes, records=len(merged), queries_requested=queries_requested,
             duplicates_dropped=duplicates, address_results=address_results, spec=spec,
+            csv_cells_escaped=stats.get("csv_cells_escaped", 0),
             files={ext: file_digest(f"{out_prefix}.{ext}")
                    for ext in ("json", "csv") if fmt in (ext, "both")}))
 
