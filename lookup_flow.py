@@ -357,8 +357,12 @@ def lookup_one(session, args, solver: Solver, budget: Budget, index: int,
         if not state.ready:
             outcome.reason = reason or "captcha_not_answered"
             # A captcha the site keeps refusing is a gate, not a transient.
-            outcome.blocked = reason in ("captcha_rejected", "captcha_no_key",
-                                         "captcha_budget_exhausted",
+            # A missing 2Captcha key or a --max-solves cap the caller chose is
+            # NOT a refusal: the site refused nothing, the run simply never
+            # asked. Those end as "not obtained" (exit 5, or 6 with rows),
+            # with the reason naming the cause, so nobody goes looking for a
+            # proxy to fix a missing key.
+            outcome.blocked = reason in ("captcha_rejected",
                                          "captcha_attempts_exhausted")
             return outcome
         # The button follows the check's verdict asynchronously; give it a
@@ -623,8 +627,8 @@ class ScanResult:
     widget: Optional[str] = None          # "turnstile" / "recaptcha_v2" / ...
     sitekey: Optional[str] = None
     autosolve_events: List[str] = field(default_factory=list)
-    # Three different claims, kept apart (template §23: "we solved it" and
-    # "the token got in" are different claims):
+    # Three different claims, kept apart ("we solved it" and "the token got
+    # in" are different claims):
     token_injected: bool = False           # a 2Captcha token was put in the page
     site_verified: Optional[bool] = None   # the challenge is GONE when re-read
     solved: Optional[bool] = None          # == site_verified; never set on faith

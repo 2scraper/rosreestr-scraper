@@ -6,7 +6,41 @@ behaviour change in one is announced at the top of its notes.
 
 ## [Unreleased]
 
+> **Behaviour changes.**
+> * **No 2Captcha key, or a `--max-solves` cap already spent, now ends with
+>   exit 5 (6 if some rows were gathered), not exit 3.** The site refused
+>   nothing in either case; `queries_failed` names `captcha_no_key` or
+>   `captcha_budget_exhausted`. A script that treated 3 as "add a key" should
+>   read that reason instead.
+> * **Output files are no longer created 0600.** A new JSON, CSV, sidecar or
+>   dump file gets the mode `open()` would give it (`0o666` minus the umask,
+>   so 0644 under the usual 022), and a file that already exists keeps its
+>   own mode. Before, every write left the file readable by its owner alone
+>   and narrowed an existing 0664 file to 0600.
+
 ### Fixed
+
+- **A CSV cell beginning with a line feed was not neutralised.** `\n` joins
+  `=`, `+`, `-`, `@`, tab and CR as a formula lead, and the sidecar now
+  records `csv_cells_escaped`: how many CSV cells got the leading apostrophe
+  (the JSON keeps the site's text unchanged).
+- **The credential scan now reads renamed copies of `.env`** (`.env.bak`,
+  `.env.save`, `.env.old`, ...) even though `.gitignore` covers them, and
+  fails if it read no files at all. A working `.env` is still not read.
+- `.gitignore` covers `<out>.debug.html` / `.debug.png` and `dump/`.
+- The suite's summary counts the skipped engine modules it lists.
+- Public files no longer refer to an internal document the reader cannot
+  open; the rules are stated in place. A suite check keeps it that way.
+- The weekly dependency audit was red on two new urllib3 1.x advisories in
+  the pyppeteer lock (PYSEC-2026-4175, -4177). pyppeteer requires
+  `urllib3<2` and 1.26.20 is the last 1.x, so there is no compatible fix;
+  they are ignored by ID like the five before them, and the README now says
+  so under the pyppeteer engine.
+- **The canary runs weekly and fails, rather than skipping green, when
+  `ROSREESTR_CDP_ENDPOINT` or `TWOCAPTCHA_KEY` is missing.** It had been
+  dispatch-only partly because Scraping Browser credentials were said to
+  expire in about a day; that figure was never measured (0.1.1's notes
+  repeat it) and the 401 advice no longer states it.
 
 - **A timeout through a Russian exit was advised to "use a Russian exit".**
   The advice now reads the exit country from the endpoint's or proxy's login

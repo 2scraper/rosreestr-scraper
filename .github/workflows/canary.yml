@@ -4,15 +4,14 @@ name: canary
 # to the site only shows up when a user hits it. This is the other half — a
 # real run against the live service.
 #
-# DISPATCH-ONLY, and SKIPS (green, with a notice) without its secrets, for two
-# measured reasons:
-#   * lk.rosreestr.ru does not answer from outside Russia (every host timed out
-#     at the TCP connect from a Belgian exit, 2026-09-29), and a GitHub runner
-#     is outside Russia — so a canary with no Russian exit cannot pass, and a
-#     check that is always red teaches everyone to ignore checks;
-#   * a Scraping Browser profile's credentials expire in about a day, so a
-#     scheduled job would go red on a stale secret rather than on the site.
-# Refresh ROSREESTR_CDP_ENDPOINT (country-ru) before dispatching.
+# WEEKLY, plus on dispatch. lk.rosreestr.ru does not answer from outside
+# Russia (every host timed out at the TCP connect from a Belgian exit,
+# 2026-09-29), and a GitHub runner is outside Russia, so both jobs need the
+# ROSREESTR_CDP_ENDPOINT secret (a Scraping Browser profile, country-ru).
+# Without it a job FAILS with an ::error:: naming the secret: a canary that
+# skips green tests nothing, and a red one says exactly what to set. An
+# expired profile is reported the same way, as a red run whose log says 401;
+# how long a profile's credentials last has not been measured here.
 #
 # Two jobs, because they need different things:
 #   free-lookups  the address search + the code dictionaries: no captcha,
@@ -20,7 +19,14 @@ name: canary
 #   full-record   one cadastral number: one paid image captcha (~$0.001),
 #                 needs the exit AND TWOCAPTCHA_KEY
 on:
+  schedule:
+    - cron: "17 6 * * 1"      # Mondays 06:17 UTC
   workflow_dispatch:
+    inputs:
+      full_record:
+        description: "Also run the full-record job (one paid image captcha, ~$0.001)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -39,7 +45,9 @@ jobs:
           python-version: "3.12"
       - name: No Russian exit configured
         if: env.HAS_EXIT != 'true'
-        run: echo "::notice::Skipped — lk.rosreestr.ru answers only Russian exits. Set the ROSREESTR_CDP_ENDPOINT secret (a Scraping Browser profile with country-ru) and dispatch again."
+        run: |
+          echo "::error::ROSREESTR_CDP_ENDPOINT is not set. lk.rosreestr.ru answers only Russian exits: set it to a Scraping Browser profile with country-ru and run again."
+          exit 1
       - name: Install the Playwright engine
         if: env.HAS_EXIT == 'true'
         run: pip install --require-hashes -r requirements-playwright.lock
@@ -76,7 +84,7 @@ jobs:
     # "500 Internal Server Error profile_locked" on all three attempts.
     # `always()` so a red free-lookups still lets this one run.
     needs: free-lookups
-    if: always()
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.full_record)
     runs-on: ubuntu-latest
     env:
       HAS_ALL: ${{ secrets.ROSREESTR_CDP_ENDPOINT != '' && secrets.TWOCAPTCHA_KEY != '' }}
@@ -89,7 +97,9 @@ jobs:
           python-version: "3.12"
       - name: Missing secrets
         if: env.HAS_ALL != 'true'
-        run: echo "::notice::Skipped — a full record needs ROSREESTR_CDP_ENDPOINT (country-ru) AND TWOCAPTCHA_KEY for its one image captcha."
+        run: |
+          echo "::error::A full record needs ROSREESTR_CDP_ENDPOINT (country-ru) AND TWOCAPTCHA_KEY (its one image captcha); at least one of them is not set."
+          exit 1
       - name: Install the Playwright engine
         if: env.HAS_ALL == 'true'
         run: pip install --require-hashes -r requirements-playwright.lock

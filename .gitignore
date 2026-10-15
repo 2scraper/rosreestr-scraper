@@ -10,6 +10,11 @@ rosreestr_objects.*
 *.meta.json
 *_debug.html
 *_debug.png
+# cli.run writes `<out>.debug.html` beside a non-default --out, and
+# --dump-html writes into a directory the caller names.
+*.debug.html
+*.debug.png
+dump/
 *.page[0-9]
 *.page[0-9][0-9]
 *.page[0-9][0-9][0-9]

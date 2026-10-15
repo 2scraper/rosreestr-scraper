@@ -217,6 +217,7 @@ A sample cut from real runs: [`sample_output.json`](sample_output.json) /
 | `0` | every query answered (some may be "no such object" — listed in `queries_not_found`) |
 | `2` | bad usage |
 | `3` | blocked: the captcha kept being refused, or the site refused the request |
+| `5` (no key / cap) | a lookup needed a paid captcha and there was no 2Captcha key, or `--max-solves` was already spent: the site refused nothing, so this is not exit 3 (`queries_failed` names `captcha_no_key` / `captcha_budget_exhausted`; with some rows the run is `6`) |
 | `4` | every query answered "no such object" (or nothing of the `--list-kind` asked); nothing written (`--allow-empty` to write an empty table) |
 | `5` | nothing obtained — no Russian exit, a dead proxy, the browser never started, or an answer that was not the site's contract (an error object, a non-2xx status, records without a cadastral number) |
 | `6` | partial: some answered, some failed (`queries_failed`, by input position and reason) |
@@ -263,6 +264,10 @@ More in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
   2018, so set `PYPPETEER_EXECUTABLE_PATH` to a current one. Its own
   `page.authenticate()` no longer works on current Chrome (the CDP method it
   uses is gone); this engine answers the proxy's challenge itself.
+  It also pins `urllib3<2`, and 1.26.20 (the last 1.x) carries published
+  advisories fixed only in 2.x — seven as of 2026-10-15. They cannot be
+  cleared while this engine exists; if that matters to you, use Playwright,
+  whose lock has none.
 - **The Scraper API cannot fetch full records.** A record's captcha belongs
   to the page session that showed it; a Scraper API task has no session. Its
   own exits reached the site for a tiny request and timed out on the address

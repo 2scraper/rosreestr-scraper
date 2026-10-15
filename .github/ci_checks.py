@@ -280,12 +280,13 @@ def tracked_files():
 # into pip's vendored code and flags a 32-hex string in `_elffile.py` as
 # key-shaped. Correct about the string, wrong about the file — and it is the
 # FIRST thing a new user sees from `python3 smoke_test.py`. A guard people
-# have to argue with is one they learn to suppress (CLAUDE.md §22).
+# have to argue with is one they learn to suppress.
 #
 # Deliberately NOT a narrowing of what gets scanned: an untracked file is
 # still read, because a key pasted into a scratch file beside the scripts is
 # exactly the case this scan exists for.
 _VENV_CACHE = {}
+ENV_BACKUP = re.compile(r"^\.env.*(\.(bak|backup|save|saved|old|orig|hold|copy|tmp)|~)$", re.I)
 
 
 def _is_in_virtualenv(path):
@@ -324,12 +325,25 @@ def scanned_files():
                           machine that had ever run the scraper for real,
                           which is the machine most likely to run it.
     """
+    seen = set()
     for path in _git_files("--cached", "--others", "--exclude-standard"):
         if not path.is_file() or path.suffix.lower() in BINARY_SUFFIXES:
             continue
         if _is_in_virtualenv(path):
             continue
+        seen.add(path)
         yield path
+    # One exception to "ignored files are expected": a COPY of a .env. The
+    # working `.env` is the developer's own and stays unread, but a renamed
+    # copy (`.env.bak`, `.env.save`, `.env.old`, ...) is the file that gets
+    # forgotten, renamed again, and committed with a live key in it. Only the
+    # backup spellings are read, so a working `.env` or `.env.local` never
+    # turns the suite red.
+    for path in _git_files("--others", "--ignored", "--exclude-standard"):
+        if not ENV_BACKUP.match(path.name) or path in seen:
+            continue
+        if path.is_file() and not _is_in_virtualenv(path):
+            yield path
 
 
 def help_check():
@@ -448,6 +462,11 @@ def secret_check():
                           f"make_fixtures.py, which scrubs them and proves "
                           f"the trim parses identically.")
 
+    # A scan that read nothing reports "clean" for the wrong reason (a git
+    # failure, a wrong working directory): that is a failure, not a pass.
+    if scanned == 0:
+        failed.append("the credential scan read 0 files — git ls-files "
+                      "returned nothing, so 'clean' would mean nothing")
     if not failed:
         print(f"ok       {scanned} files scanned, nothing credential-shaped, "
               f"no raw capture tracked")
