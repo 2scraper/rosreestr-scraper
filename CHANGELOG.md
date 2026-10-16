@@ -6,6 +6,8 @@ behaviour change in one is announced at the top of its notes.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-16
+
 > **Behaviour changes.**
 > * **No 2Captcha key, or a `--max-solves` cap already spent, now ends with
 >   exit 5 (6 if some rows were gathered), not exit 3.** The site refused
