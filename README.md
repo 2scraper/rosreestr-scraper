@@ -1,4 +1,4 @@
-# rosreestr-scraper
+# Rosreestr Scraper — Russian Cadastral Property Records in Python
 
 [![release](https://img.shields.io/github/v/release/2scraper/rosreestr-scraper)](https://github.com/2scraper/rosreestr-scraper/releases)
 [![tests](https://github.com/2scraper/rosreestr-scraper/actions/workflows/tests.yml/badge.svg)](https://github.com/2scraper/rosreestr-scraper/actions/workflows/tests.yml)
@@ -7,6 +7,8 @@
 [![licence](https://img.shields.io/badge/licence-MIT-green)](LICENSE)
 ![engines](https://img.shields.io/badge/engines-Playwright%20%C2%B7%20Selenium%20%C2%B7%20Puppeteer%20%C2%B7%20Scraper%20API-informational)
 ![exit](https://img.shields.io/badge/needs-a%20Russian%20exit-orange)
+
+**Rosreestr scraper** — an open-source (MIT) Python tool that reads Rosreestr's online reference service at lk.rosreestr.ru and writes cadastral value, object type, area, status, registration and valuation dates, purpose, and registered rights and encumbrances to JSON or CSV, by cadastral number or for every object at an address. The service answers only Russian addresses — from a Belgian exit on 2026-09-29 every Rosreestr host timed out — so it needs a Russian exit: a Scraping Browser API profile with `country-ru` or a 2Captcha proxy with a `-region-ru` login. Use it to monitor a watchlist of objects for re-valuations, status changes and rights registered or lifted, comparing two runs with `diff_runs.py`.
 
 Look real-estate objects up in **Rosreestr's online reference service**
 ([lk.rosreestr.ru — «Справочная информация по объектам недвижимости в режиме
@@ -325,3 +327,20 @@ about property, but addresses and rights can relate to people. The
 cadastral engineer's personal data is deliberately not collected.
 
 MIT licence.
+
+## Guides
+
+- [How to run the 2scraper scrapers: setup, proxies, exit codes and access modes](https://2captcha.com/h/how-to-run-2scraper-open-source-scrapers) — installation, `.env`, `.meta.json` for the whole family.
+
+## Related scrapers
+
+Same CLI conventions, same output contract (one row per item, JSON or CSV, a `.meta.json` sidecar and shared exit codes):
+
+- [Skyscanner scraper](https://github.com/2scraper/skyscanner-scraper) — Route and dates in — every itinerary with price, airline…
+- [Spinny scraper](https://github.com/2scraper/spinny-scraper) — Used-car listings and car detail pages
+- [Vrbo scraper](https://github.com/2scraper/vrbo-scraper) — Vacation rental prices, ratings and property details…
+- [Webmotors scraper](https://github.com/2scraper/webmotors-scraper) — Car and motorcycle listings from Brazil's webmotors.com.br…
+- [Zimmo scraper](https://github.com/2scraper/zimmo-scraper) — Zimmo.be sale and rent listings
+- [Autotrader scraper](https://github.com/2scraper/autotrader-scraper) — US car listings with VIN, fee-inclusive price, KBB fair…
+
+All scrapers: [github.com/2scraper](https://github.com/2scraper) · Need another site? [Open a request](https://github.com/2scraper/.github/issues/new?title=%5BScraper%20request%5D%20)
