@@ -6,6 +6,10 @@ behaviour change in one is announced at the top of its notes.
 
 ## [Unreleased]
 
+### Changed
+
+- CI only: the scheduled canary now starts at 05:27 UTC (Mondays) instead of 06:17, so canaries that share one Scraping Browser profile no longer start at the same time and lock each other out.
+
 ### Security
 
 - **certifi raised to 2026.10.23 in every lock** (from 2026.7.22, affected by
