@@ -6,6 +6,17 @@ behaviour change in one is announced at the top of its notes.
 
 ## [Unreleased]
 
+### Security
+
+- **certifi raised to 2026.10.23 in every lock** (from 2026.7.22, affected by
+  PYSEC-2026-4320, fixed in 2026.10.18). The CI-only tooling lock also takes
+  filelock 4.2.9 (Python 3.11+), msgpack 1.2.4 and setuptools 84.2.1 for newly
+  published advisories. Only these packages were upgraded; every other pin is
+  unchanged. On Python 3.9, urllib3 and requests (and, in the CI lock,
+  filelock, also on 3.10) stay at the last release that supports that Python;
+  those releases carry known advisories fixed only in releases that need a
+  newer Python. The weekly audit runs on 3.12 and does not report them.
+
 ## [0.2.0] — 2026-10-16
 
 > **Behaviour changes.**
